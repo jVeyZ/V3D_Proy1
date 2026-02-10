@@ -1,0 +1,13 @@
+proyecto_posicionamiento/
+├── config.py            # Configuración global
+├── calibration.py       # Calibración con homografía
+├── detection.py         # Detección manual y automática
+├── tracking.py          # Seguimiento de objetos
+├── positioning.py       # Posicionamiento planar + corrección altura
+├── virtual_scene.py     # Escena virtual con Open3D (gemelo digital)
+├── ar_viewer.py         # Visor de realidad aumentada
+├── game_engine.py       # Motor del juego de mini-golf
+├── demo_camera.py       # Cámara simulada para pruebas sin hardware
+├── main.py              # Aplicación principal
+├── requirements.txt
+└── README.md
