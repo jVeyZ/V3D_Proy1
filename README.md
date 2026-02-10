@@ -26,6 +26,21 @@ proyecto_posicionamiento/
 └── README.md            # Este archivo
 ```
 
+## Apartados del proyecto
+Archivo |	Función |	Apartado
+------- | ------- | ------- |
+config.py	|	Configuración global (cámara, colores, dimensiones, juego)	|	Transversal |
+calibration.py	|	Homografía imagen↔plano (manual + ArUco)	|	1.3 |
+detection.py	|	Detección manual (clic) y automática (HSV + contornos + Hough)	|	1.2 |
+tracking.py	|	Seguimiento por color (ROI adaptativa) y OpenCV (CSRT/KCF)	|	1.2 |
+positioning.py	|	Posicionamiento planar + corrección de altura	|	1.3 + 1.4 |
+virtual_scene.py	|	Gemelo digital 3D (Open3D) + vista 2D alternativa	|	1.1 |
+ar_viewer.py	|	Superposición AR de hoyo, trayectoria, puntuación	|	1.3 |
+game_engine.py	|	Motor de mini-golf (niveles, golpes, embocada, colisiones)	|	1.5 |
+demo_camera.py	|	Cámara simulada con pelota movible (ratón/teclado)	|	Pruebas |
+main.py	|	Aplicación principal que integra todo el pipeline	|	1.5 |
+README.md	|	Documentación del proyecto	|	— |
+
 ---
 
 ## Requisitos
@@ -192,3 +207,5 @@ Todos los parámetros ajustables están en `config.py`:
 - Parámetros de seguimiento
 - Posiciones de hoyos y obstáculos
 - Colores de la escena virtual y AR
+
+

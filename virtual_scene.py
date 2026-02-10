@@ -9,7 +9,7 @@ Apartado 1.1: Crear y mostrar una escena virtual que sea un gemelo digital
 import numpy as np
 
 try:
-    import open3d as o3d
+    import open3d as o3d # type: ignore
     OPEN3D_AVAILABLE = True
 except ImportError:
     OPEN3D_AVAILABLE = False
