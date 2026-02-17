@@ -144,11 +144,4 @@ Redacta un `README.md` completo que incluya: propósito del proyecto, estructura
 Genera `requirements.txt` con versiones mínimas: opencv-contrib-python>=4.5.0, numpy, open3d (opcional), pytest. Añade `structure.txt` con árbol resumido del repo.
 ```
 
----
 
-### Notas finales
-- Tiempo total estimado de integración (estado actual del repo):  ≤ 2 semanas (trabajo incremental con revisiones y pruebas). 
-- Las *Prompts empleadas* se han formulado como especificaciones claras y ejecutables (código + criterios de aceptación + pruebas) para garantizar reproducibilidad en la implementación.
-
-## v0.1.0 - Inicial
-- Estado inicial del repositorio: detección, tracking, positioning, demo y juego.
