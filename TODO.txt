@@ -1,0 +1,30 @@
+Verificar el uso de uno de los trackers de la presentación: 
+
+
+TEMA 3.4 – Seguimiento
+• 8 different Trackers
+1. BOOSTING: Basado en el algoritmo de Haar cascades (AdaBoost). Ha
+quedado anticuado. Interesante solo para comparar con otros algoritmos.
+2. MIL (Multiple Instance Learning): Mejora la precisión del rastreador
+BOOSTING con movimientos rápidos. Aunque no mejora en el caso de
+oclusiones.
+3. MedianFlow: Método basado en el método de Luca-Kanade. Presenta una
+alta probabilidad de pérdida de objetos debido a ocultamientos o movimientos
+rápidos. Aunque reporta con precisión cuando se producen estas pérdidas.
+4. TLD (Tracking Learning Detection): Intenta ser robusto ante cambios de
+escala y ocultamientos, pero en ocasiones presenta comportamientos
+inestables.
+5. KCF (Kernelized Correlation Filters): Más rápido que BOOSTING, MIL y TLD.
+Similar en precisión a MIL.
+6. CSRT: Filtro de correlación discriminatorio (con canal y confiabilidad
+espacial). Suele ser más preciso que KCF, pero ligeramente más lento
+7. MOSSE: Basado en correlaciones en el espacio de Fourier. Es el método
+más rápido. No tan preciso como CSRT o KCF.
+8. GOTURN (Generic Object Tracking Using Regression Networks): El único
+detector de objetos basado en aprendizaje profundo incluido en OpenCV.
+Requiere de los archivos del modelo para ejecutarse. Probarlo pero parece que
+requiere un ajuste fino (fine-tunning) del modelo para que funcione
+perfectamente.
+
+
+4 últimos más rápidos (y óptimos?)
