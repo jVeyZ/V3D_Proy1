@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/CMakeFiles/bootloader
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/CMakeFiles/bootloader.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/CMakeFiles/bootloader-complete.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

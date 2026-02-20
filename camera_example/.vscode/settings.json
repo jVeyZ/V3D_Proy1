@@ -1,0 +1,13 @@
+{
+    "idf.port": "/dev/tty.usbserial-1110",
+    "idf.flashType": "UART",
+    "files.associations": {
+        "esp_camera.h": "c"
+    },
+    "idf.customExtraVars": {
+        "IDF_TARGET": "esp32"
+    },
+    "idf.openOcdConfigs": [
+        "board/esp32-wrover-kit-3.3v.cfg"
+    ]
+}
