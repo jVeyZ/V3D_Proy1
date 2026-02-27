@@ -58,7 +58,8 @@ class HomographyCalibrator:
                 cv2.putText(display, str(i + 1), (pt[0] + 10, pt[1] - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 if i > 0:
-                    cv2.line(display, self._click_points[i - 1], pt, (0, 255, 0), 2)
+                    cv2.line(
+                        display, self._click_points[i - 1], pt, (0, 255, 0), 2)
 
             # Instrucciones
             idx = len(self._click_points)
@@ -98,10 +99,14 @@ class HomographyCalibrator:
     # --------------------------------------------------------
     # Calibración automática con ArUco
     # --------------------------------------------------------
-    def calibrate_aruco(self, frame, marker_ids_order=(0, 1, 2, 3)):
+    def calibrate_aruco(self, frame, marker_ids_order=(0, 1, 2, 3), quiet=False):
         """
         Detecta 4 marcadores ArUco y usa sus centros como esquinas.
         marker_ids_order: IDs de los marcadores en orden TL, TR, BR, BL.
+
+        Esta función puede llamarse repetidamente (por ejemplo cada frame) para
+        actualizar dinámicamente la homografía cuando la cámara se mueve.
+        Si ``quiet`` es True se suprimen los mensajes impresos (útil para bucles).
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -117,8 +122,9 @@ class HomographyCalibrator:
                 gray, aruco_dict, parameters=parameters)
 
         if ids is None or len(ids) < 4:
-            print(f"[ArUco] Solo se detectaron {0 if ids is None else len(ids)} "
-                  f"marcadores. Se necesitan 4.")
+            if not quiet:
+                print(f"[ArUco] Solo se detectaron {0 if ids is None else len(ids)} "
+                      f"marcadores. Se necesitan 4.")
             return False
 
         # Mapear ID → centro del marcador
@@ -131,35 +137,40 @@ class HomographyCalibrator:
         image_pts = []
         for mid in marker_ids_order:
             if mid not in id_to_center:
-                print(f"[ArUco] No se encontró el marcador ID={mid}")
+                if not quiet:
+                    print(f"[ArUco] No se encontró el marcador ID={mid}")
                 return False
             image_pts.append(id_to_center[mid])
 
         self.image_corners = np.array(image_pts, dtype=np.float64)
-        print(f"[ArUco] Esquinas detectadas: {self.image_corners}")
-        return self._compute_homography()
+        if not quiet:
+            print(f"[ArUco] Esquinas detectadas: {self.image_corners}")
+        return self._compute_homography(quiet=quiet)
 
     # --------------------------------------------------------
     # Cálculo de la homografía
     # --------------------------------------------------------
-    def _compute_homography(self):
+    def _compute_homography(self, quiet=False):
         """Calcula la homografía a partir de image_corners y world_corners."""
         self.H, status = cv2.findHomography(
             self.image_corners, self.world_corners, cv2.RANSAC, 5.0
         )
 
         if self.H is None:
-            print("[Calibración] Error al calcular la homografía.")
+            if not quiet:
+                print("[Calibración] Error al calcular la homografía.")
             self._calibration_done = False
             return False
 
         self.H_inv = np.linalg.inv(self.H)
         self._calibration_done = True
 
-        # Evaluar error de reproyección
         error = self._reprojection_error()
-        print(f"[Calibración] Homografía calculada. Error de reproyección: "
-              f"{error:.3f} px")
+        if not quiet:
+            print(
+                f"[Calibración] Homografía calculada. Error de reproyección: "
+                f"{error:.3f} px"
+            )
         return True
 
     def _reprojection_error(self):
@@ -181,7 +192,7 @@ class HomographyCalibrator:
     def image_to_world(self, image_point):
         """
         Transforma un punto de imagen (px) a coordenadas del plano (cm).
-        
+
         Args:
             image_point: (u, v) en píxeles
         Returns:
@@ -199,7 +210,7 @@ class HomographyCalibrator:
     def world_to_image(self, world_point):
         """
         Transforma un punto del plano (cm) a coordenadas de imagen (px).
-        
+
         Args:
             world_point: (X, Y) en cm
         Returns:

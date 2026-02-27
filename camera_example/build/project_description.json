@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "camera_example",
-    "project_version":    "7918ab9-dirty",
+    "project_version":    "db011f6-dirty",
     "project_path":       "/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example",
     "idf_path":           "/Users/riftka221/esp/v5.5.2/esp-idf",
     "build_dir":          "/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build",

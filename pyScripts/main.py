@@ -88,7 +88,7 @@ def parse_args():
 class MiniGolfApp:
     """
     Aplicación principal que orquesta todos los módulos.
-    
+
     Pipeline por frame:
       1. Capturar imagen de la cámara
       2. Si primer frame: detectar pelota (manual o automática)
@@ -177,12 +177,14 @@ class MiniGolfApp:
             self.camera = cv2.VideoCapture(cam_src)
             if not self.camera.isOpened():
                 print("[Main] ERROR: No se pudo abrir la cámara.")
-                print("[Main] Sugerencia: usa --demo para modo simulado o verifica la URL/índice de la cámara.")
+                print(
+                    "[Main] Sugerencia: usa --demo para modo simulado o verifica la URL/índice de la cámara.")
                 return False
             # Intentar configurar tamaño; no todos los streams permiten esto
             try:
                 self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT,
+                                config.CAMERA_HEIGHT)
             except Exception:
                 pass
             print(f"[Main] Cámara abierta: "
@@ -192,12 +194,11 @@ class MiniGolfApp:
 
     def _calibrate(self):
         """Realiza la calibración de la homografía."""
-        ret, frame = self.camera.read()
-        if not ret:
-            print("[Main] ERROR: No se pudo leer un frame de la cámara.")
-            return False
-
         if self.auto_calibrate and self.use_demo:
+            ret, frame = self.camera.read()
+            if not ret:
+                print("[Main] ERROR: No se pudo leer un frame de la cámara.")
+                return False
             # En modo demo, usar las esquinas conocidas directamente
             print("[Main] Calibración automática con esquinas conocidas (demo)")
             demo_corners = self.camera.get_calibration_corners()
@@ -205,13 +206,34 @@ class MiniGolfApp:
             self.calibrator.world_corners = config.WORLD_CORNERS.copy()
             success = self.calibrator._compute_homography()
         elif self.auto_calibrate:
-            # En cámara real, intentar ArUco
+            # En cámara real, intentar ArUco de forma persistente
             print("[Main] Intentando calibración automática con ArUco...")
-            success = self.calibrator.calibrate_aruco(frame)
-            if not success:
-                print("[Main] ArUco falló. Cambiando a calibración manual.")
-                success = self.calibrator.calibrate_manual(frame)
+            print("[Main] Esperando 4 marcadores ArUco (sin fallback a manual).")
+            attempts = 0
+            success = False
+            while True:
+                ret, frame = self.camera.read()
+                if not ret:
+                    print("[Main] ERROR: No se pudo leer un frame de la cámara.")
+                    return False
+
+                success = self.calibrator.calibrate_aruco(frame, quiet=True)
+                if success:
+                    break
+
+                attempts += 1
+                if attempts % 30 == 0:
+                    print("[Main] Aún no hay 4 ArUcos válidos. Reintentando...")
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == 27 or key == ord('q'):
+                    print("[Main] Calibración automática cancelada por el usuario.")
+                    return False
         else:
+            ret, frame = self.camera.read()
+            if not ret:
+                print("[Main] ERROR: No se pudo leer un frame de la cámara.")
+                return False
             # Calibración manual interactiva
             print("[Main] Calibración manual: haz clic en las 4 esquinas")
             success = self.calibrator.calibrate_manual(frame)
@@ -243,11 +265,9 @@ class MiniGolfApp:
                 print("[Main] No se pudo iniciar Open3D. "
                       "Se usará solo la vista 2D.")
                 self.virtual_scene_3d = None
-                self._use_3d = False
         except Exception as e:
             print(f"[Main] Error al iniciar Open3D: {e}")
             self.virtual_scene_3d = None
-            self._use_3d = False
 
     def _main_loop(self):
         """Bucle principal de procesamiento frame a frame."""
@@ -262,6 +282,7 @@ class MiniGolfApp:
         fps_timer = time.time()
         frame_count = 0
         fps_display = 0
+        open3d_retry_counter = 30
 
         while self._running:
             # 1. Capturar frame
@@ -271,6 +292,23 @@ class MiniGolfApp:
             if not ret:
                 print("[Main] No se pudo leer frame. Finalizando.")
                 break
+
+            # 2. Si está habilitada la calibración automática con cámara real,
+            #    intentar actualizar la homografía en cada frame. Esto hace que
+            #    el campo se "mueva" junto al número ArUco si la cámara se
+            #    desplaza, evitando que el área de juego quede fijada en píxeles.
+            if self.auto_calibrate and not self.use_demo:
+                # calibrar_aruco devuelve False si no había 4 marcadores; en ese
+                # caso conservamos la calibración previa.
+                self.calibrator.calibrate_aruco(frame, quiet=True)
+
+            # 2b. Reintentar Open3D automáticamente para que aparezca por
+            #     defecto sin necesidad de pulsar 'v' si falló al inicio.
+            if self._use_3d and self.virtual_scene_3d is None:
+                open3d_retry_counter += 1
+                if open3d_retry_counter >= 30:
+                    self._init_3d_scene()
+                    open3d_retry_counter = 0
 
             # 2. Detectar / Seguir pelota
             ball_detection = self._process_detection(frame)
@@ -350,7 +388,7 @@ class MiniGolfApp:
     def _process_detection(self, frame):
         """
         Procesa la detección/seguimiento de la pelota.
-        
+
         - Primer frame: detección (manual o automática)
         - Frames siguientes: seguimiento
         """
@@ -367,7 +405,8 @@ class MiniGolfApp:
                 # El usuario debe pulsar 'm' o hacer click en la ventana para iniciar
                 # la detección manual. Mostrar la instrucción una sola vez.
                 if not self._manual_hint_shown:
-                    print("[Main] Modo MANUAL activo. Pulse 'm' o haga click en la ventana para detectar la pelota.")
+                    print(
+                        "[Main] Modo MANUAL activo. Pulse 'm' o haga click en la ventana para detectar la pelota.")
                     self._manual_hint_shown = True
 
             if detection is not None:
@@ -433,12 +472,13 @@ class MiniGolfApp:
                 else:
                     self.tracker.initialize(cx, cy, radius)
                 self._first_frame = False
-                print(f"[Main] Pelota detectada (click manual): px=({cx}, {cy}), r={radius}")
+                print(
+                    f"[Main] Pelota detectada (click manual): px=({cx}, {cy}), r={radius}")
 
     def _handle_key(self, key, frame):
         """
         Procesa las pulsaciones de teclado.
-        
+
         Returns:
             False si debe salir, True en caso contrario.
         """
@@ -463,6 +503,9 @@ class MiniGolfApp:
                     demo_corners = self.camera.get_calibration_corners()
                     self.calibrator.image_corners = demo_corners
                     self.calibrator._compute_homography()
+                elif self.auto_calibrate and not self.use_demo:
+                    # en cámara real con auto calibración, usar ArUco
+                    self.calibrator.calibrate_aruco(frame)
                 else:
                     self.calibrator.calibrate_manual(frame)
                 self.positioner = PlanarPositioner(self.calibrator)
@@ -523,7 +566,8 @@ class MiniGolfApp:
             if self._last_frame is not None:
                 # Hacer una detección no bloqueante en el centro de la imagen
                 h, w = self._last_frame.shape[:2]
-                detection = self.manual_detector.detect_point(self._last_frame, w // 2, h // 2)
+                detection = self.manual_detector.detect_point(
+                    self._last_frame, w // 2, h // 2)
 
             if detection is None:
                 # Fallback: abrir popup si realmente se necesita
@@ -536,7 +580,8 @@ class MiniGolfApp:
                 else:
                     self.tracker.initialize(cx, cy, radius)
                 self._first_frame = False
-                print(f"[Main] Pelota detectada (manual): px=({cx}, {cy}), r={radius}")
+                print(
+                    f"[Main] Pelota detectada (manual): px=({cx}, {cy}), r={radius}")
 
         # Explicar corrección de altura
         elif key == ord('e'):
@@ -554,7 +599,7 @@ class MiniGolfApp:
         x0 = (w - panel_w) // 2
         y0 = (h - panel_h) // 2
         cv2.rectangle(overlay, (x0, y0), (x0 + panel_w, y0 + panel_h),
-                       (0, 0, 0), -1)
+                      (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
 
         # Título

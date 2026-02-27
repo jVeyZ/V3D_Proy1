@@ -358,6 +358,9 @@ PYTHON:UNINITIALIZED=/Users/riftka221/.espressif/python_env/idf5.5_py3.10_env/bi
 //No help, variable specified on the command line.
 PYTHON_DEPS_CHECKED:UNINITIALIZED=1
 
+//No help, variable specified on the command line.
+SDKCONFIG:UNINITIALIZED=/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/sdkconfig
+
 //Allow unsafe builds. These builds ARE NOT SECURE.
 UNSAFE_BUILD:BOOL=OFF
 

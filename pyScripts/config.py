@@ -37,9 +37,15 @@ WORLD_CORNERS = np.array([
 # ============================================================
 # DETECCIÓN DE PELOTA (rango HSV para pelota naranja)
 # ============================================================
+# Custom color detection: approximate rgba(168,158,87) (#A89E57)
+# Hue ~26, Saturation ~122, Value ~168 (OpenCV H:0‑179, S/V:0‑255)
+# Expand the range to tolerate lighting; adjust if needed.
+BALL_HSV_LOWER = np.array([20,  80, 100])
+BALL_HSV_UPPER = np.array([32, 200, 200])
+
 # Para pelota naranja típica
-BALL_HSV_LOWER = np.array([5, 100, 100])
-BALL_HSV_UPPER = np.array([25, 255, 255])
+# BALL_HSV_LOWER = np.array([5, 100, 100])
+# BALL_HSV_UPPER = np.array([25, 255, 255])
 
 # Para pelota roja (alternativa)
 # BALL_HSV_LOWER = np.array([0, 120, 70])
@@ -57,15 +63,17 @@ BALL_REAL_DIAMETER_CM = BALL_REAL_RADIUS_CM * 2
 # ============================================================
 # SEGUIMIENTO
 # ============================================================
-TRACKING_SEARCH_MARGIN = 80     # margen de búsqueda en px alrededor de última posición
-TRACKING_METHOD = "color"       # "color" | "csrt" | "kcf"
+# margen de búsqueda en px alrededor de última posición
+TRACKING_SEARCH_MARGIN = 80
+TRACKING_METHOD = "csrt"       # "color" | "csrt" | "kcf"
 
 # ============================================================
 # JUEGO DE MINI-GOLF
 # ============================================================
 HOLE_RADIUS_CM = 3.5             # radio del hoyo virtual (cm)
 HOLE_IN_TOLERANCE_CM = 4.0       # distancia para considerar "embocada"
-BALL_STOPPED_THRESHOLD_CM = 0.8  # umbral de movimiento para considerar la pelota parada
+# umbral de movimiento para considerar la pelota parada
+BALL_STOPPED_THRESHOLD_CM = 0.8
 BALL_STOPPED_FRAMES = 15         # frames consecutivos parada para confirmar
 
 # Posiciones de los hoyos virtuales (cm) - varios niveles

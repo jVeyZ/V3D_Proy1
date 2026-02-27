@@ -1,5 +1,5 @@
 {
-    "idf.port": "/dev/tty.usbserial-1110",
+    "idf.port": "/dev/tty.usbserial-140",
     "idf.flashType": "UART",
     "files.associations": {
         "esp_camera.h": "c"
@@ -9,5 +9,8 @@
     },
     "idf.openOcdConfigs": [
         "board/esp32-wrover-kit-3.3v.cfg"
-    ]
+    ],
+    "idf.pythonInstallPath": "/Users/riftka221/.pyenv/shims/python",
+    "idf.espIdfPath": "/Users/riftka221/esp/v5.5.2/esp-idf",
+    "idf.toolsPath": "/Users/riftka221/.espressif"
 }

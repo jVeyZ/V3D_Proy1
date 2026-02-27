@@ -6,6 +6,8 @@ Aplicación interactiva de posicionamiento planar con una sola cámara que integ
 detección, seguimiento y posicionamiento de objetos reales sobre un plano de
 trabajo, combinado con un juego de mini-golf virtual.
 
+
+python main.py --auto-calibrate --auto-detect --camera "http://10.135.115.245/stream"
 python pyScripts/main.py --camera "http://10.135.115.245/stream"
 
 ---
