@@ -9,9 +9,6 @@ import numpy as np
 # ============================================================
 # Índice por defecto de la cámara (webcam local)
 CAMERA_INDEX = 0
-# Nueva opción: fuente de cámara (puede ser índice entero o URL HTTP/RTSP)
-# Por compatibilidad mantenemos CAMERA_INDEX y añadimos CAMERA_SOURCE.
-# Ejemplo de stream HTTP: 'http://10.135.115.245/stream'
 CAMERA_SOURCE = CAMERA_INDEX
 # URL de ejemplo provista por el usuario (no activa por defecto)
 CAMERA_HTTP_URL = 'http://10.135.115.245/stream'
@@ -37,21 +34,12 @@ WORLD_CORNERS = np.array([
 # ============================================================
 # DETECCIÓN DE PELOTA (rango HSV para pelota naranja)
 # ============================================================
-# Custom color detection: approximate rgba(168,158,87) (#A89E57)
-# Hue ~26, Saturation ~122, Value ~168 (OpenCV H:0‑179, S/V:0‑255)
-# Expand the range to tolerate lighting; adjust if needed.
-#BALL_HSV_LOWER = np.array([20,  80, 100])
-#BALL_HSV_UPPER = np.array([32, 200, 200])
 
 # Para pelota naranja 
 # BALL_HSV_LOWER = np.array([5, 100, 100])
 # BALL_HSV_UPPER = np.array([25, 255, 255])
 
-# Para pelota roja (alternativa)
-# BALL_HSV_LOWER = np.array([0, 120, 70])
-# BALL_HSV_UPPER = np.array([10, 255, 255])
-
-# Para pelota verde (alternativa)
+# Para pelota verde 
 BALL_HSV_LOWER = np.array([20, 110, 140])
 BALL_HSV_UPPER = np.array([40, 255, 255])
 
@@ -65,7 +53,7 @@ BALL_REAL_DIAMETER_CM = BALL_REAL_RADIUS_CM * 2
 # ============================================================
 # margen de búsqueda en px alrededor de última posición
 TRACKING_SEARCH_MARGIN = 80
-TRACKING_METHOD = "csrt"       # "color" | "csrt" | "kcf"
+TRACKING_METHOD = "csrt"       # "color" | "csrt" | "kcf" | "mosse" 
 
 # ============================================================
 # JUEGO DE MINI-GOLF
