@@ -1,3 +1,5 @@
 __pycache__/
 camera_example/build/
 camera_example/.vscode/
+.DS_Store
+.vscode/
