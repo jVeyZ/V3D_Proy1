@@ -1,15 +1,9 @@
-"""
-virtual_scene.py - Escena virtual 3D con Open3D (Gemelo Digital).
-
-Apartado 1.1: Crear y mostrar una escena virtual que sea un gemelo digital 
-              de la escena real. Muestra al menos un objeto real (pelota) 
-              y uno virtual (hoyo).
-"""
+"""Escenas virtuales del proyecto (Open3D y fallback 2D con OpenCV)."""
 
 import numpy as np
 
 try:
-    import open3d as o3d # type: ignore
+    import open3d as o3d  # type: ignore
     OPEN3D_AVAILABLE = True
 except ImportError:
     OPEN3D_AVAILABLE = False
@@ -19,41 +13,18 @@ import config
 
 
 class VirtualScene:
-    """
-    Escena virtual 3D usando Open3D que replica el escenario real.
-    
-    Elementos:
-      - Mesa/plano de trabajo (objeto real → representación virtual)
-      - Pelota (objeto real → posición actualizada desde la cámara)
-      - Hoyo (objeto virtual)
-      - Bandera (objeto virtual)
-      - Trayectoria de la pelota (virtual)
-      - Obstáculos (virtuales, opcionales)
-    """
+    """Gemelo digital 3D del mini-golf."""
 
     def __init__(self):
         self.vis = None
         self._geometries = {}
-        self._ball_position = np.array([30.0, 20.0, config.BALL_REAL_RADIUS_CM])
+        self._ball_position = np.array(
+            [30.0, 20.0, config.BALL_REAL_RADIUS_CM])
         self._hole_position = np.array([45.0, 20.0, 0.0])
         self._trail_points = []
         self._is_running = False
-        self._thread = None
         self._update_needed = False
         self._scale = config.SCENE_SCALE
-
-    def initialize(self, hole_position=None):
-        """Inicializa la escena virtual con todos los elementos."""
-        if not OPEN3D_AVAILABLE:
-            print("[VirtualScene] Open3D no disponible, saltando inicialización.")
-            return False
-
-        if hole_position is not None:
-            self._hole_position = np.array([hole_position[0], hole_position[1], 0.0])
-
-        self._create_geometries()
-        self._start_visualization()
-        return True
 
     def _create_geometries(self):
         """Crea todas las geometrías de la escena."""
@@ -158,11 +129,11 @@ class VirtualScene:
         self._geometries['flag'] = flag
 
         # --- OBSTÁCULOS (virtuales) ---
-        for i, (ox, oy, orad) in enumerate(config.OBSTACLES):
+        for i, (obstacle_x, obstacle_y, obstacle_radius_cm) in enumerate(config.OBSTACLES):
             obs = o3d.geometry.TriangleMesh.create_cylinder(
-                radius=orad * s, height=3 * s, resolution=20
+                radius=obstacle_radius_cm * s, height=3 * s, resolution=20
             )
-            obs.translate([ox * s, oy * s, 0])
+            obs.translate([obstacle_x * s, obstacle_y * s, 0])
             obs.paint_uniform_color(config.COLOR_OBSTACLE)
             obs.compute_vertex_normals()
             self._geometries[f'obstacle_{i}'] = obs
@@ -178,13 +149,14 @@ class VirtualScene:
         self._geometries['axes'] = axes
 
     def initialize(self, hole_position=None):
-        """Inicializa la escena virtual con todos los elementos."""
+        """Inicializa el visualizador Open3D y sus geometrías."""
         if not OPEN3D_AVAILABLE:
             print("[VirtualScene] Open3D no disponible, saltando inicialización.")
             return False
 
         if hole_position is not None:
-            self._hole_position = np.array([hole_position[0], hole_position[1], 0.0])
+            self._hole_position = np.array(
+                [hole_position[0], hole_position[1], 0.0])
 
         self._create_geometries()
 
@@ -196,20 +168,18 @@ class VirtualScene:
                 width=800, height=600
             )
 
-            # Añadir todas las geometrías
+            # Registrar geometrías una única vez.
             for geom in self._geometries.values():
                 self.vis.add_geometry(geom)
 
-                # Configurar cámara (vista oblicua para enfatizar el 3D)
+            # Vista oblicua para mejorar percepción de profundidad.
             ctr = self.vis.get_view_control()
             ctr.set_zoom(0.6)
-            # Un front con componente positiva x y negativa y y z ligeramente negativa
-            # para obtener un ángulo oblicuo y elevar la mirada ligeramente
             ctr.set_front([0.5, -1.0, -0.7])
             ctr.set_lookat([
                 config.PLAY_AREA_WIDTH * self._scale / 2,
                 config.PLAY_AREA_HEIGHT * self._scale / 2,
-                0.02  # mirar un poco por encima del plano para dar profundidad
+                0.02,
             ])
             ctr.set_up([0, 0, 1])
 
@@ -255,7 +225,7 @@ class VirtualScene:
     def update_ball_position(self, world_pos_cm):
         """
         Actualiza la posición de la pelota en la escena virtual.
-        
+
         Args:
             world_pos_cm: np.array([X, Y]) en cm
         """
@@ -329,7 +299,8 @@ class VirtualScene:
         if 'trail' in self._geometries:
             trail = self._geometries['trail']
             trail.points = o3d.utility.Vector3dVector(np.zeros((0, 3)))
-            trail.lines = o3d.utility.Vector2iVector(np.zeros((0, 2), dtype=int))
+            trail.lines = o3d.utility.Vector2iVector(
+                np.zeros((0, 2), dtype=int))
         self._update_needed = True
 
     def show_ball_in_hole(self):
@@ -403,12 +374,12 @@ class SimpleVirtualScene:
 
         # Borde
         cv2.rectangle(img, (0, 0), (self.width - 1, self.height - 1),
-                       (30, 80, 200), 3)
+                      (30, 80, 200), 3)
 
         # Obstáculos
-        for (ox, oy, orad) in self.obstacles:
-            center = self._world_to_view(np.array([ox, oy]))
-            r = self._world_radius_to_view(orad)
+        for obstacle_x, obstacle_y, obstacle_radius_cm in self.obstacles:
+            center = self._world_to_view(np.array([obstacle_x, obstacle_y]))
+            r = self._world_radius_to_view(obstacle_radius_cm)
             cv2.circle(img, center, r, (0, 0, 180), -1)
             cv2.circle(img, center, r, (0, 0, 100), 2)
 
@@ -428,7 +399,8 @@ class SimpleVirtualScene:
             cv2.circle(img, center, r, (50, 50, 50), -1)
             cv2.circle(img, center, r, (0, 0, 0), 2)
             # Bandera
-            cv2.line(img, center, (center[0], center[1] - 30), (200, 200, 200), 2)
+            cv2.line(img, center, (center[0],
+                     center[1] - 30), (200, 200, 200), 2)
             pts = np.array([
                 [center[0], center[1] - 30],
                 [center[0] + 15, center[1] - 25],

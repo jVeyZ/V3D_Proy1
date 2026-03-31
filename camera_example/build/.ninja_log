@@ -883,3 +883,5 @@
 179	199	1771574462849598810	bootloader-prefix/src/bootloader-stamp/bootloader-install	40b4d761e394465
 34954	35095	1771573832228788482	esp-idf/espressif__esp32-camera/libespressif__esp32-camera.a	bb715ac22fa266fe
 32774	33997	1771573830049039007	esp-idf/driver/CMakeFiles/__idf_driver.dir/deprecated/rmt_legacy.c.obj	29873ba3338b4320
+25	3832998	1772178701736270110	CMakeFiles/confserver	e4afca5e7f4ef422
+25	3832998	1772178701736270110	/Users/riftka221/code/upv/V3D/proyecto_posicionamiento/camera_example/build/CMakeFiles/confserver	e4afca5e7f4ef422

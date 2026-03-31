@@ -29,10 +29,8 @@ Controles durante la ejecución:
   WASD/flechas → Mover pelota (solo demo)
 """
 
-import sys
 import argparse
 import cv2
-import numpy as np
 import time
 
 import config
@@ -341,6 +339,8 @@ class MiniGolfApp:
             # Actualizar hoyo en escenas
             hole_pos = self.game_engine.state.hole_position
             self.virtual_scene_2d.update_hole(hole_pos)
+            if self.virtual_scene_3d is not None and hole_pos is not None:
+                self.virtual_scene_3d.update_hole_position(hole_pos)
 
             # Mantener el visualizador 3D actualizado (si está activo)
             if self.virtual_scene_3d is not None:
@@ -380,7 +380,7 @@ class MiniGolfApp:
 
             # 10. Procesar teclado
             key = cv2.waitKey(1) & 0xFF
-            if not self._handle_key(key, frame):
+            if not self._handle_key(key):
                 break
 
         cv2.destroyAllWindows()
@@ -461,7 +461,11 @@ class MiniGolfApp:
                 pass
 
         # Detección manual no bloqueante con click
-        if event == cv2.EVENT_LBUTTONDOWN and self._detection_mode == 'manual' and self._first_frame:
+        if (
+            event == cv2.EVENT_LBUTTONDOWN
+            and self._detection_mode == 'manual'
+            and self._first_frame
+        ):
             if self._last_frame is None:
                 return
             det = self.manual_detector.detect_point(self._last_frame, x, y)
@@ -475,7 +479,7 @@ class MiniGolfApp:
                 print(
                     f"[Main] Pelota detectada (click manual): px=({cx}, {cy}), r={radius}")
 
-    def _handle_key(self, key, frame):
+    def _handle_key(self, key):
         """
         Procesa las pulsaciones de teclado.
 
@@ -520,7 +524,6 @@ class MiniGolfApp:
             self.ar_viewer.clear_trail()
             # Reset hint so the message shows once on entering manual
             self._manual_hint_shown = False
-            self.ar_viewer.clear_trail()
             if self.virtual_scene_3d:
                 self.virtual_scene_3d.clear_trail()
 

@@ -17,7 +17,7 @@ import config
 class ColorTracker:
     """
     Seguimiento basado en color HSV con ventana de búsqueda adaptativa.
-    
+
     Utiliza la detección por color restringida a una región de interés (ROI)
     alrededor de la última posición conocida del objeto.
     """
@@ -52,10 +52,10 @@ class ColorTracker:
     def update(self, frame):
         """
         Actualiza la posición del objeto en el nuevo frame.
-        
+
         Args:
             frame: imagen BGR
-            
+
         Returns:
             (cx, cy, radius) o None si se perdió el objeto.
         """
@@ -123,7 +123,8 @@ class ColorTracker:
             # Puntuación: cercanía a posición predicha + similitud de radio
             dist = np.sqrt((cx_global - predicted[0]) ** 2 +
                            (cy_global - predicted[1]) ** 2)
-            radius_diff = abs(radius - self.last_radius) / max(self.last_radius, 1)
+            radius_diff = abs(radius - self.last_radius) / \
+                max(self.last_radius, 1)
 
             # Circularidad
             perimeter = cv2.arcLength(cnt, True)
@@ -169,7 +170,7 @@ class ColorTracker:
 class OpenCVTracker:
     """
     Wrapper sobre los trackers de OpenCV (CSRT, KCF, etc.).
-    
+
     Utiliza la bounding box de la detección inicial para inicializar
     el tracker de OpenCV, que luego realiza el seguimiento frame a frame.
     """
@@ -185,12 +186,14 @@ class OpenCVTracker:
     def _create_tracker(self):
         if self.method == "csrt":
             return cv2.TrackerCSRT_create()
-        elif self.method == "kcf":
+        if self.method == "kcf":
             return cv2.TrackerKCF_create()
-        elif self.method == "mosse":
-            return cv2.legacy.TrackerMOSSE_create()
-        else:
-            return cv2.TrackerCSRT_create()
+        if self.method == "mosse":
+            if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerMOSSE_create"):
+                return cv2.legacy.TrackerMOSSE_create()
+            if hasattr(cv2, "TrackerMOSSE_create"):
+                return cv2.TrackerMOSSE_create()
+        return cv2.TrackerCSRT_create()
 
     def initialize(self, cx, cy, radius, frame=None):
         """Inicializa el tracker con la detección y el frame."""
@@ -253,9 +256,10 @@ def create_tracker(method=None):
     if method is None:
         method = config.TRACKING_METHOD
 
+    method = method.lower()
+
     if method == "color":
         return ColorTracker()
-    elif method in ("csrt", "kcf", "mosse"):
+    if method in ("csrt", "kcf", "mosse"):
         return OpenCVTracker(method)
-    else:
-        return ColorTracker()
+    return ColorTracker()

@@ -29,12 +29,12 @@ class ARViewer:
     def draw(self, frame, game_state=None, ball_detection=None):
         """
         Dibuja todos los elementos AR sobre el frame de la cámara.
-        
+
         Args:
             frame: imagen BGR de la cámara
             game_state: diccionario con el estado del juego
             ball_detection: (cx, cy, radius) detección de la pelota en imagen
-            
+
         Returns:
             frame con elementos AR superpuestos
         """
@@ -104,7 +104,8 @@ class ARViewer:
         overlay = frame.copy()
         cv2.circle(overlay, center, radius_px, config.AR_HOLE_COLOR_BGR, -1)
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-        cv2.circle(frame, center, radius_px, config.AR_HOLE_BORDER_COLOR_BGR, 2)
+        cv2.circle(frame, center, radius_px,
+                   config.AR_HOLE_BORDER_COLOR_BGR, 2)
 
         # Bandera
         flag_top = (center[0], center[1] - radius_px * 3)
@@ -118,21 +119,26 @@ class ARViewer:
 
     def _draw_obstacles(self, frame, obstacles):
         """Dibuja los obstáculos virtuales."""
-        for (ox, oy, orad) in obstacles:
-            center = self.calibrator.world_to_image(np.array([ox, oy]))
+        for obstacle_x, obstacle_y, obstacle_radius_cm in obstacles:
+            center = self.calibrator.world_to_image(
+                np.array([obstacle_x, obstacle_y])
+            )
             if center is None:
                 continue
 
             center = tuple(center.astype(int))
 
-            offset = self.calibrator.world_to_image(np.array([ox + orad, oy]))
+            offset = self.calibrator.world_to_image(
+                np.array([obstacle_x + obstacle_radius_cm, obstacle_y])
+            )
             if offset is not None:
                 radius_px = int(np.linalg.norm(offset - np.array(center)))
             else:
                 radius_px = 15
 
             overlay = frame.copy()
-            cv2.circle(overlay, center, radius_px, config.AR_OBSTACLE_COLOR_BGR, -1)
+            cv2.circle(overlay, center, radius_px,
+                       config.AR_OBSTACLE_COLOR_BGR, -1)
             cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
             cv2.circle(frame, center, radius_px, (0, 0, 100), 2)
 
@@ -207,7 +213,8 @@ class ARViewer:
     def add_trail_point(self, image_point):
         """Añade un punto a la trayectoria en imagen."""
         if image_point is not None:
-            self.trail_image_points.append(np.array(image_point, dtype=np.float64))
+            self.trail_image_points.append(
+                np.array(image_point, dtype=np.float64))
             if len(self.trail_image_points) > self._max_trail:
                 self.trail_image_points = self.trail_image_points[-self._max_trail:]
 

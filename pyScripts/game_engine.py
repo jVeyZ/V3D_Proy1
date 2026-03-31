@@ -8,7 +8,7 @@ Apartado 1.5: Aplicación de posicionamiento planar que integra la
 
 Funcionalidades:
   - Gestión de estado del juego (niveles, golpes, puntuación)
-  - Detección de pelota embocada (hoyo)
+  - Detección de pelota en hoyo
   - Detección de pelota parada (conteo de golpes)
   - Colisiones con obstáculos
   - Progresión de niveles
@@ -57,7 +57,7 @@ class GameState:
 class MiniGolfEngine:
     """
     Motor de juego de mini-golf virtual.
-    
+
     Mecánica:
       - La pelota real se mueve sobre la mesa (plano de trabajo).
       - Un hoyo virtual se proyecta en la mesa mediante AR.
@@ -98,11 +98,11 @@ class MiniGolfEngine:
     def update(self, ball_world_pos):
         """
         Actualiza el estado del juego con la nueva posición de la pelota.
-        
+
         Args:
             ball_world_pos: np.array([X, Y]) posición en cm, o None si
                            la pelota no se detecta.
-                           
+
         Returns:
             GameState actualizado
         """
@@ -117,7 +117,7 @@ class MiniGolfEngine:
                 self._advance_level()
             else:
                 remaining = self._celebration_duration - elapsed
-                self.state.status = f"¡EMBOCADA! Siguiente nivel en {remaining:.0f}s"
+                self.state.status = f"¡HOYO! Siguiente nivel en {remaining:.0f}s"
             return self.state
 
         if ball_world_pos is None:
@@ -177,7 +177,7 @@ class MiniGolfEngine:
     def _check_movement(self):
         """
         Comprueba si la pelota está en movimiento o parada.
-        
+
         Returns:
             True si la pelota se está moviendo.
         """
@@ -202,7 +202,7 @@ class MiniGolfEngine:
         return self._stopped_frame_count < config.BALL_STOPPED_FRAMES
 
     def _hole_in(self):
-        """Procesa una pelota embocada."""
+        """Procesa una pelota en hoyo."""
         self.state.is_hole_in = True
         self._celebrating = True
         self._hole_in_time = time.time()
@@ -214,10 +214,11 @@ class MiniGolfEngine:
         score = self.state.putts
         self.state.total_score += score
 
-        self.state.status = (f"¡¡¡EMBOCADA en {self.state.putts} golpe"
+        self.state.status = (f"¡¡¡Hoyo! *** "
+                             f"en {self.state.putts} golpe"
                              f"{'s' if self.state.putts != 1 else ''}!!!")
 
-        print(f"\n[MiniGolf] *** ¡EMBOCADA! *** "
+        print(f"\n[MiniGolf] *** ¡Hoyo! *** "
               f"Nivel {self.state.level} completado en "
               f"{self.state.putts} golpe(s).")
         print(f"[MiniGolf] Puntuación nivel: {score} | "
@@ -270,29 +271,29 @@ class MiniGolfEngine:
     def check_obstacle_collision(self, ball_pos):
         """
         Comprueba si la pelota colisiona con algún obstáculo.
-        
+
         Args:
             ball_pos: np.array([X, Y]) en cm
-            
+
         Returns:
             True si hay colisión, (ox, oy, orad) del obstáculo, o
             False, None si no hay colisión.
         """
-        for (ox, oy, orad) in self.state.obstacles:
-            obstacle_center = np.array([ox, oy])
+        for obstacle_x, obstacle_y, obstacle_radius_cm in self.state.obstacles:
+            obstacle_center = np.array([obstacle_x, obstacle_y])
             dist = np.linalg.norm(ball_pos - obstacle_center)
-            combined_radius = orad + config.BALL_REAL_RADIUS_CM
+            combined_radius = obstacle_radius_cm + config.BALL_REAL_RADIUS_CM
             if dist < combined_radius:
-                return True, (ox, oy, orad)
+                return True, (obstacle_x, obstacle_y, obstacle_radius_cm)
         return False, None
 
     def is_ball_in_bounds(self, ball_pos):
         """
         Comprueba si la pelota está dentro del área de juego.
-        
+
         Args:
             ball_pos: np.array([X, Y]) en cm
-            
+
         Returns:
             True si está dentro.
         """

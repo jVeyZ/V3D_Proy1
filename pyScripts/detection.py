@@ -21,7 +21,7 @@ class ManualDetector:
     def detect(self, frame):
         """
         Muestra la imagen y espera un clic del usuario.
-        
+
         Returns:
             (x, y, radius) en píxeles, o None si se cancela.
         """
@@ -58,7 +58,7 @@ class ManualDetector:
         radius = self._estimate_radius(frame, x, y)
         return (x, y, radius)
 
-    def _mouse_callback(self, event, x, y, flags, param):
+    def _mouse_callback(self, event, x, y, _flags, _param):
         if event == cv2.EVENT_LBUTTONDOWN:
             self._clicked_point = (x, y)
         elif event == cv2.EVENT_LBUTTONDBLCLK:
@@ -97,7 +97,7 @@ class ManualDetector:
         for cnt in contours:
             (x, y), r = cv2.minEnclosingCircle(cnt)
             if config.BALL_MIN_RADIUS_PX < r < config.BALL_MAX_RADIUS_PX:
-                dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+                dist = np.hypot(x - cx, y - cy)
                 if dist < best_dist:
                     best_dist = dist
                     best_radius = r
@@ -122,10 +122,11 @@ class ManualDetector:
             return None
         return (int(x), int(y), int(radius))
 
+
 class AutomaticDetector:
     """
     Detección automática de la pelota por color (HSV) y forma circular.
-    
+
     Combina umbralización HSV, operaciones morfológicas, detección de contornos
     y filtrado por circularidad.
     """
@@ -138,11 +139,11 @@ class AutomaticDetector:
     def detect(self, frame, roi=None):
         """
         Detecta la pelota en la imagen completa o dentro de una ROI.
-        
+
         Args:
             frame: imagen BGR
             roi: (x, y, w, h) región de interés opcional
-            
+
         Returns:
             (cx, cy, radius) del mejor candidato, o None si no se detecta.
         """
@@ -271,4 +272,5 @@ class AutomaticDetector:
         return results[:max_objects]
 
     def set_debug(self, debug=True):
+        """Activa o desactiva visualización intermedia de la máscara."""
         self._debug = debug

@@ -92,7 +92,7 @@ class HomographyCalibrator:
         self.image_corners = np.array(self._click_points, dtype=np.float64)
         return self._compute_homography()
 
-    def _mouse_callback_calibration(self, event, x, y, flags, param):
+    def _mouse_callback_calibration(self, event, x, y, _flags, _param):
         if event == cv2.EVENT_LBUTTONDOWN and len(self._click_points) < 4:
             self._click_points.append((x, y))
 
@@ -116,9 +116,9 @@ class HomographyCalibrator:
 
         try:
             detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-            corners, ids, rejected = detector.detectMarkers(gray)
+            corners, ids, _ = detector.detectMarkers(gray)
         except AttributeError:
-            corners, ids, rejected = cv2.aruco.detectMarkers(
+            corners, ids, _ = cv2.aruco.detectMarkers(
                 gray, aruco_dict, parameters=parameters)
 
         if ids is None or len(ids) < 4:
