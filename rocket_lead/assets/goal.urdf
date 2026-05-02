@@ -1,0 +1,47 @@
+<?xml version="1.0" ?>
+<robot name="goal">
+  <link name="goalLink">
+  <contact>
+      <lateral_friction value="1"/>
+  </contact>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+       <mass value=".0"/>
+       <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+	<mesh filename="goal.obj" scale=".5 .5 .5"/>
+      </geometry>
+       <material name="white">
+        <color rgba="1 1 1 1"/>
+      </material>
+    </visual>
+    <collision name="trasera">
+      <origin rpy="0 0 0" xyz="0 1 -0.05"/>
+      <geometry>
+	<box size="5 2 0.05"/>
+      </geometry>
+    </collision>
+    <collision name="lat_i">
+      <origin rpy="0 0 0" xyz="2.525 1.025 -0.5"/>
+      <geometry>
+	<box size="0.05 2 1"/>
+      </geometry>
+    </collision>
+    <collision  name="lat_d">
+      <origin rpy="0 0 0" xyz="-2.525 1.025 -0.5"/>
+      <geometry>
+	<box size="0.05 2 1"/>
+      </geometry>
+    </collision>
+    <collision  name="techo">
+      <origin rpy="0 0 0" xyz="0 2.025 -0.5"/>
+      <geometry>
+	<box size="5 0.05 1"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>
+

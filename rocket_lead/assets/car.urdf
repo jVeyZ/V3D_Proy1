@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<robot name="car">
+  <link name="base">
+    <inertial>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+
+    <!--
+      El OBJ viene en coordenadas Blender: Y=arriba, Z=largo del coche.
+      PyBullet usa Z=arriba, Y=adelante.
+      rpy="1.5708 0 0" = R_x(90°) corrige el eje de altura.
+      xyz="0 0 -0.19" centra verticalmente el mesh en el origen del link.
+      Si el morro apunta hacia atrás al probar, cambia rpy a "1.5708 0 3.14159".
+    -->
+    <visual>
+        <origin xyz="0 0 -0.19" rpy="1.5708 0 3.14159"/>
+      <geometry>
+        <mesh filename="Car.obj" scale="0.24 0.24 0.24"/>
+      </geometry>
+    </visual>
+
+    <!-- Caja de colisión invisible centrada en el origin del link -->
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.50 1.12 0.38"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>
