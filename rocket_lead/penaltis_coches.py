@@ -117,6 +117,7 @@ def init_simulation():
     create_field_boundaries()
     goal_ids = create_simple_goals()
     car_id = create_car()
+    p.changeVisualShape(car_id, -1, rgbaColor=[0.9, 0.2, 0.2, 1])
     return physicsClient, car_id, goal_ids
 
 
@@ -197,27 +198,47 @@ def create_field_boundaries():
 
 def create_car():
     """
-    Carga el modelo 3D del coche desde assets/car.urdf (que referencia Car.obj + Car.mtl).
-    La colisión es una GEOM_BOX invisible; el visual es el mesh real con materiales.
+    Coche con mesh OBJ (colores del .mtl) + caja de colisión.
 
-    Si al probar el morro apunta hacia atrás, cambia el rpy del <visual> en
-    assets/car.urdf de "1.5708 0 0" a "1.5708 0 3.14159".
+    El mesh Blender tiene Y=up, Z=largo. PyBullet usa Z=up, Y=adelante.
+    Corrección: R_x(90°) baked en MESH_EXTRA_RPY.
+
+    En CarController.update() el quaternion de orientación = R_z(heading) * R_x(90°)
+    para que la rotación visual sea siempre correcta.
+
+    Ajustes si algo no cuadra visualmente:
+      MESH_YAW  = np.pi   → morro apunta al revés
+      z_center  += 0.05   → coche flota  /  -= 0.05 → se hunde
+      SCALE     *= 1.1    → coche demasiado pequeño
     """
-    start_y = -FIELD_LENGTH / 2 + 1.5
-    z_center = 0.19    # mitad de la altura escalada (1.59 * 0.24 / 2)
+    SCALE       = 0.24
+    z_center    = 0.19
+    MESH_YAW    = np.pi
 
-    car_id = p.loadURDF(
-        "assets/car.urdf",
+    start_y = -FIELD_LENGTH / 2 + 1.5
+
+    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.25, 0.56, 0.19])
+    vis = p.createVisualShape(
+        p.GEOM_MESH,
+        fileName="assets/Car.obj",
+        meshScale=[SCALE, SCALE, SCALE]
+    )
+
+    # Orientación inicial = R_z(0) * R_x(90°)
+    base_orn = p.getQuaternionFromEuler([np.pi / 2, 0, MESH_YAW])
+
+    car_id = p.createMultiBody(
+        baseMass=0,
+        baseCollisionShapeIndex=col,
+        baseVisualShapeIndex=vis,
         basePosition=[0, start_y, z_center],
-        baseOrientation=p.getQuaternionFromEuler([0, 0, 0]),
-        useFixedBase=False,
-        flags=p.URDF_USE_MATERIAL_COLORS_FROM_MTL
+        baseOrientation=base_orn
     )
     return car_id
 
 
 def create_tracked_ball():
-    radius = 0.18
+    radius = 0.27
     col = p.createCollisionShape(p.GEOM_SPHERE, radius=radius)
     vis = p.createVisualShape(p.GEOM_SPHERE, radius=radius,
                                rgbaColor=[0.0, 1.0, 0.0, 0.9])
@@ -225,9 +246,30 @@ def create_tracked_ball():
     return ball_id
 
 
+from pynput import keyboard as pynput_kb
+
 # ─────────────────────────────────────────────
-# CONTROL DEL COCHE (DIRECTO, SIN INERCIA)
+# TECLADO FIABLE (pynput — independiente de PyBullet)
 # ─────────────────────────────────────────────
+_keys_down = set()   # conjunto de teclas actualmente pulsadas
+
+def _on_press(key):
+    try:
+        _keys_down.add(key.char)
+    except AttributeError:
+        _keys_down.add(key)
+
+def _on_release(key):
+    try:
+        _keys_down.discard(key.char)
+    except AttributeError:
+        _keys_down.discard(key)
+
+_kb_listener = pynput_kb.Listener(on_press=_on_press, on_release=_on_release)
+_kb_listener.start()
+
+def key_pressed(c):
+    return c in _keys_down
 class CarController:
     def __init__(self, car_id):
         self.car_id = car_id
@@ -235,22 +277,24 @@ class CarController:
         self.y = -FIELD_LENGTH / 2 + 1.5
         self.heading = 0.0   # 0 = nariz roja apunta a +Y global
 
+    # Nuestro propio estado de teclas — ignora KEY_IS_DOWN de PyBullet
+    # que queda pegado cuando hay lag. Solo KEY_WAS_TRIGGERED / KEY_WAS_RELEASED.
+    _key_state = {}
+
+    _key_state    = {}
+    _key_time     = {}
+    KEY_TIMEOUT   = 0.5
+
     def update(self, dt):
-        # Leer teclado fresco cada frame — evita teclas "pegadas"
-        keys = p.getKeyboardEvents()
-        dt = min(dt, 0.05)   # limitar lag puntual
+        dt = min(dt, 0.05)
 
         speed = 0.0
-        if ord('w') in keys and keys[ord('w')] & p.KEY_IS_DOWN:
-            speed = 2.5
-        elif ord('s') in keys and keys[ord('s')] & p.KEY_IS_DOWN:
-            speed = -1.2
+        if key_pressed('w'):   speed =  2.5
+        elif key_pressed('s'): speed = -1.2
 
         turn = 0.0
-        if ord('a') in keys and keys[ord('a')] & p.KEY_IS_DOWN:
-            turn = 2.0
-        elif ord('d') in keys and keys[ord('d')] & p.KEY_IS_DOWN:
-            turn = -2.0
+        if key_pressed('a'):   turn =  2.0
+        elif key_pressed('d'): turn = -2.0
 
         self.heading += turn * dt
         self.heading %= (2 * np.pi)
@@ -263,38 +307,16 @@ class CarController:
         self.y = max(-FIELD_LENGTH/2 + margin, min(FIELD_LENGTH/2 - margin, self.y))
 
         z = 0.19
-        orn = p.getQuaternionFromEuler([0, 0, self.heading])
+        q_z  = p.getQuaternionFromEuler([0, 0, self.heading + np.pi])
+        q_x  = p.getQuaternionFromEuler([np.pi / 2, 0, 0])
+        _, orn = p.multiplyTransforms([0,0,0], q_z, [0,0,0], q_x)
         p.resetBasePositionAndOrientation(self.car_id, [self.x, self.y, z], orn)
 
-        return keys, [self.x, self.y, z]
+        # Devolver raw de PyBullet solo para Q/R/C del bucle principal
+        raw = p.getKeyboardEvents()
+        return raw, [self.x, self.y, z]
 
 
-
-# ─────────────────────────────────────────────
-# CÁMARA PYBULLET
-# ─────────────────────────────────────────────
-class CameraController:
-    MODES = ['cenital', 'follow']
-    
-    def __init__(self):
-        self.mode_idx = 0
-        self.smooth_pos = np.array([0.0, 0.0, 5.0])
-        
-    def get_mode(self):
-        return self.MODES[self.mode_idx]
-    
-    def next_mode(self):
-        self.mode_idx = (self.mode_idx + 1) % len(self.MODES)
-        print(f"[CAM] Modo: {self.get_mode()}")
-        
-    def update(self, car_pos):
-        mode = self.get_mode()
-        if mode == 'cenital':
-            p.resetDebugVisualizerCamera(18, 90, -89, car_pos)
-        elif mode == 'follow':
-            target = np.array(car_pos)
-            self.smooth_pos = self.smooth_pos * 0.9 + target * 0.1
-            p.resetDebugVisualizerCamera(10, 90, -60, self.smooth_pos.tolist())
 
 
 # ─────────────────────────────────────────────
@@ -469,6 +491,33 @@ def gesture_worker(frame_q):
 
 
 # ─────────────────────────────────────────────
+# CÁMARA PYBULLET
+# ─────────────────────────────────────────────
+class CameraController:
+    MODES = ['cenital', 'follow']
+
+    def __init__(self):
+        self.mode_idx = 0
+        self.smooth_pos = np.array([0.0, 0.0, 0.0])
+
+    def get_mode(self):
+        return self.MODES[self.mode_idx]
+
+    def next_mode(self):
+        self.mode_idx = (self.mode_idx + 1) % len(self.MODES)
+        print(f"[CAM] Modo: {self.get_mode()}")
+
+    def update(self, car_pos):
+        mode = self.get_mode()
+        if mode == 'cenital':
+            p.resetDebugVisualizerCamera(18, 90, -89, car_pos)
+        elif mode == 'follow':
+            target = np.array(car_pos)
+            self.smooth_pos += (target - self.smooth_pos) * 0.12
+            p.resetDebugVisualizerCamera(6, 180, -30, self.smooth_pos.tolist())
+
+
+# ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 def main():
@@ -507,12 +556,15 @@ def main():
     
     running = True
     last_time = time.time()
+    _r_was_down = False
+    _c_was_down = False
 
     # ── Estado de eventos de juego ──
     _msg_text_id   = None   # ID del texto PyBullet en pantalla
     _msg_timer     = 0.0    # segundos restantes del mensaje
     _gol_cooldown  = 0.0    # evitar GOL repetido mientras la bola sigue dentro
     _ball_pb_pos   = [0.0, 0.0, 0.18]   # última posición conocida
+    _ball_seen     = False               # True en cuanto llega 1 world_pos real
 
     def show_message(text, color=(1, 1, 0)):
         nonlocal _msg_text_id, _msg_timer
@@ -537,19 +589,21 @@ def main():
         keys, car_pos = car.update(dt)
         cam.update(car_pos)
 
-        if ord('q') in keys or 27 in keys:
+        if key_pressed('q'):
             running = False
             continue
 
-        if ord('r') in keys and keys[ord('r')] & p.KEY_WAS_TRIGGERED:
+        if key_pressed('r') and not _r_was_down:
             car.x = 0.0
             car.y = -FIELD_LENGTH / 2 + 1.5
             car.heading = 0.0
             p.resetBasePositionAndOrientation(car_id, [car.x, car.y, 0.19], [0, 0, 0, 1])
             print("[GAME] Reset")
+        _r_was_down = key_pressed('r')
 
-        if ord('c') in keys and keys[ord('c')] & p.KEY_WAS_TRIGGERED:
+        if key_pressed('c') and not _c_was_down:
             cam.next_mode()
+        _c_was_down = key_pressed('c')
 
         # --- Update bola ---
         world_pos = None
@@ -559,6 +613,7 @@ def main():
             pass
 
         if world_pos is not None:
+            _ball_seen = True
             # world_pos en cm: x ∈ [0, PLAY_AREA_WIDTH], y ∈ [0, PLAY_AREA_HEIGHT]
             x_pb = (world_pos[0] / config.PLAY_AREA_WIDTH  - 0.5) * FIELD_WIDTH
             y_pb = (world_pos[1] / config.PLAY_AREA_HEIGHT - 0.5) * FIELD_LENGTH
@@ -591,12 +646,14 @@ def main():
                 show_message("  ¡¡ GOL !!", color=(1, 0.9, 0))
                 _gol_cooldown = 3.0
 
-        # ── Detección Bola interceptada (distancia coche–bola) ──
-        car_pos_arr = np.array([car.x, car.y, 0.19])
-        ball_pos_arr = np.array(_ball_pb_pos)
-        dist = float(np.linalg.norm(car_pos_arr - ball_pos_arr))
-        if dist < 0.55 and _msg_timer <= 0:
-            show_message("Bola interceptada", color=(0.2, 0.8, 1))
+        # ── Detección Bola interceptada ──
+        # Solo cuando la bola ha sido vista al menos una vez por las cámaras
+        if _ball_seen:
+            car_pos_arr = np.array([car.x, car.y, 0.19])
+            ball_pos_arr = np.array(_ball_pb_pos)
+            dist = float(np.linalg.norm(car_pos_arr - ball_pos_arr))
+            if dist < 0.65 and _msg_timer <= 0:
+                show_message("Bola interceptada", color=(0.2, 0.8, 1))
         
         # ═══════════════════════════════════════════════════════════════
         # MOSTRAR VENTANAS EN MAIN THREAD (macOS lo exige)
