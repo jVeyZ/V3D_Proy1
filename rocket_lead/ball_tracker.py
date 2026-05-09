@@ -196,6 +196,7 @@ class StereoGreenTracker:
         self.left.reset()
         self.right.reset()
 
+
     @property
     def is_initialized(self):
         return self.left.is_initialized and self.right.is_initialized

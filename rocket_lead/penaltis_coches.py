@@ -27,6 +27,12 @@ gesture_queue = queue.Queue(maxsize=2)
 _aruco_lock = threading.Lock()
 _aruco_ids = {"left": set(), "right": set()}   # IDs detectados actualmente
 
+_hsv_lock = threading.Lock()
+_ball_lock = threading.Lock()
+_ball_latest = None
+_ball_latest_ts = 0.0
+
+
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN
 # ─────────────────────────────────────────────
@@ -35,6 +41,17 @@ FIELD_WIDTH = 8.0
 GOAL_WIDTH = 2.0
 GOAL_HEIGHT = 1.2
 GOAL_DEPTH = 0.8
+
+CAR_SCALE = 1.5
+CAR_COL_HALF = [0.25 * CAR_SCALE, 0.56 * CAR_SCALE, 0.19 * CAR_SCALE]
+CAR_Z_CENTER = 0.19 * CAR_SCALE
+CAR_MESH_SCALE = 0.24 * CAR_SCALE
+CAR_TOP_Z = CAR_Z_CENTER + CAR_COL_HALF[2]
+
+BALL_RADIUS = 0.40
+BALL_COLOR = [0.0, 0.9, 0.0, 0.6]
+WORLD_TO_PB = FIELD_WIDTH / config.PLAY_AREA_WIDTH
+HSV_MARGIN = np.array([12, 50, 50], dtype=np.int32)
 
 
 # ─────────────────────────────────────────────
@@ -93,7 +110,8 @@ def create_field_texture(path="assets/field_texture.png"):
 # INICIALIZACIÓN PYBULLET
 # ─────────────────────────────────────────────
 def init_simulation():
-    physicsClient = p.connect(p.GUI)
+    use_gui = os.environ.get("PYBULLET_DIRECT") not in ("1", "true", "TRUE")
+    physicsClient = p.connect(p.GUI if use_gui else p.DIRECT)
     p.configureDebugVisualizer(p.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)
     p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)          # oculta ejes y paneles
     p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 0)
@@ -217,11 +235,11 @@ def create_car():
 
     start_y = -FIELD_LENGTH / 2 + 1.5
 
-    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.25, 0.56, 0.19])
+    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=CAR_COL_HALF)
     vis = p.createVisualShape(
         p.GEOM_MESH,
         fileName="assets/Car.obj",
-        meshScale=[SCALE, SCALE, SCALE]
+        meshScale=[CAR_MESH_SCALE, CAR_MESH_SCALE, CAR_MESH_SCALE]
     )
 
     # Orientación inicial = R_z(0) * R_x(90°)
@@ -231,17 +249,20 @@ def create_car():
         baseMass=0,
         baseCollisionShapeIndex=col,
         baseVisualShapeIndex=vis,
-        basePosition=[0, start_y, z_center],
+        basePosition=[0, start_y, CAR_Z_CENTER],
         baseOrientation=base_orn
     )
     return car_id
 
 
 def create_tracked_ball():
-    radius = 0.27
+    radius = BALL_RADIUS
     col = p.createCollisionShape(p.GEOM_SPHERE, radius=radius)
-    vis = p.createVisualShape(p.GEOM_SPHERE, radius=radius,
-                               rgbaColor=[0.0, 1.0, 0.0, 0.9])
+    vis = p.createVisualShape(
+        p.GEOM_SPHERE,
+        radius=radius,
+        rgbaColor=BALL_COLOR,
+    )
     ball_id = p.createMultiBody(0, col, vis, basePosition=[0, -5, radius])
     return ball_id
 
@@ -306,7 +327,7 @@ class CarController:
         self.x = max(-FIELD_WIDTH/2 + margin, min(FIELD_WIDTH/2 - margin, self.x))
         self.y = max(-FIELD_LENGTH/2 + margin, min(FIELD_LENGTH/2 - margin, self.y))
 
-        z = 0.19
+        z = CAR_Z_CENTER
         q_z  = p.getQuaternionFromEuler([0, 0, self.heading + np.pi])
         q_x  = p.getQuaternionFromEuler([np.pi / 2, 0, 0])
         _, orn = p.multiplyTransforms([0,0,0], q_z, [0,0,0], q_x)
@@ -415,9 +436,33 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
         # Tracking
         det_l, det_r = tracker.update(frame_l, frame_r)
         pos_3d = None
+        mode_label = None
         if calibrated and det_l is not None and det_r is not None:
             pos_3d = reconstructor.triangulate(det_l[:2], det_r[:2])
             if pos_3d is not None:
+                mode_label = "TRIANG"
+        if pos_3d is None and det_l is not None:
+            img_pts = reconstructor._detect_ordered_marker_centers(frame_l)
+            if img_pts is not None:
+                H, _ = cv2.findHomography(img_pts, config.WORLD_CORNERS, cv2.RANSAC, 5.0)
+                if H is not None:
+                    pt = np.array([det_l[0], det_l[1], 1.0], dtype=np.float64)
+                    w = H @ pt
+                    if abs(w[2]) > 1e-10:
+                        pos_3d = np.array([w[0] / w[2], w[1] / w[2], config.BALL_REAL_RADIUS_CM])
+                        mode_label = "HOMOG"
+        if pos_3d is not None:
+            with _ball_lock:
+                global _ball_latest, _ball_latest_ts
+                _ball_latest = pos_3d
+                _ball_latest_ts = time.time()
+            try:
+                ball_q.put_nowait(pos_3d)
+            except queue.Full:
+                try:
+                    ball_q.get_nowait()
+                except queue.Empty:
+                    pass
                 try:
                     ball_q.put_nowait(pos_3d)
                 except queue.Full:
@@ -432,6 +477,8 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                 cv2.putText(frame, "BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
             else:
                 cv2.putText(frame, "NO BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+            if mode_label is not None:
+                cv2.putText(frame, mode_label, (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 0), 2)
             cv2.putText(frame, f"[{status}] {name}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,200,255), 1)
         
         # Enviar a main thread (NO cv2.imshow aquí)
@@ -517,6 +564,89 @@ class CameraController:
             p.resetDebugVisualizerCamera(6, 180, -30, self.smooth_pos.tolist())
 
 
+class ROISelector:
+    def __init__(self):
+        self.enabled = False
+        self.dragging = False
+        self.start = None
+        self.end = None
+        self.ready = False
+
+    def enable(self):
+        self.enabled = True
+        self.dragging = False
+        self.start = None
+        self.end = None
+        self.ready = False
+
+    def disable(self):
+        self.enabled = False
+        self.dragging = False
+        self.start = None
+        self.end = None
+        self.ready = False
+
+    def on_mouse(self, event, x, y, _flags, _param):
+        if not self.enabled:
+            return
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.dragging = True
+            self.start = (x, y)
+            self.end = (x, y)
+        elif event == cv2.EVENT_MOUSEMOVE and self.dragging:
+            self.end = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP and self.dragging:
+            self.end = (x, y)
+            self.dragging = False
+            self.ready = True
+
+    def get_roi(self):
+        if self.start is None or self.end is None:
+            return None
+        x0 = min(self.start[0], self.end[0])
+        y0 = min(self.start[1], self.end[1])
+        x1 = max(self.start[0], self.end[0])
+        y1 = max(self.start[1], self.end[1])
+        w = x1 - x0
+        h = y1 - y0
+        if w <= 5 or h <= 5:
+            return None
+        return (x0, y0, w, h)
+
+    def draw(self, frame):
+        if not self.enabled or self.start is None or self.end is None:
+            return
+        x0 = min(self.start[0], self.end[0])
+        y0 = min(self.start[1], self.end[1])
+        x1 = max(self.start[0], self.end[0])
+        y1 = max(self.start[1], self.end[1])
+        cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 255, 255), 2)
+
+
+def _set_hsv_from_roi(frame_bgr, roi):
+    x, y, w, h = roi
+    h_img, w_img = frame_bgr.shape[:2]
+    x1 = max(0, min(w_img, x + w))
+    y1 = max(0, min(h_img, y + h))
+    x0 = max(0, min(w_img - 1, x))
+    y0 = max(0, min(h_img - 1, y))
+    if x1 <= x0 or y1 <= y0:
+        return False
+    crop = frame_bgr[y0:y1, x0:x1]
+    if crop.size == 0:
+        return False
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    center = np.median(hsv.reshape(-1, 3), axis=0).astype(np.int32)
+    lower = np.clip(center - HSV_MARGIN, 0, 255).astype(np.uint8)
+    upper = np.clip(center + HSV_MARGIN, 0, 255).astype(np.uint8)
+    with _hsv_lock:
+        config.BALL_GREEN_HSV_LOWER = lower
+        config.BALL_GREEN_HSV_UPPER = upper
+    return True
+
+
+
+
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
@@ -558,13 +688,26 @@ def main():
     last_time = time.time()
     _r_was_down = False
     _c_was_down = False
+    _p_was_down = False
+
+    roi_selector = ROISelector()
+    left_window = "Stereo Left"
+    right_window = "Stereo Right"
+    left_window_ready = False
+    right_window_ready = False
+    last_left_frame = None
 
     # ── Estado de eventos de juego ──
     _msg_text_id   = None   # ID del texto PyBullet en pantalla
     _msg_timer     = 0.0    # segundos restantes del mensaje
     _gol_cooldown  = 0.0    # evitar GOL repetido mientras la bola sigue dentro
-    _ball_pb_pos   = [0.0, 0.0, 0.18]   # última posición conocida
+    _ball_pb_pos   = [0.0, 0.0, BALL_RADIUS]   # última posición conocida
     _ball_seen     = False               # True en cuanto llega 1 world_pos real
+    _ball_last_pos = None
+    _ball_speed    = 0.0
+    _score_timer   = 0.0
+    _under_timer   = 0.0
+    _score_cooldown = 0.0
 
     def show_message(text, color=(1, 1, 0)):
         nonlocal _msg_text_id, _msg_timer
@@ -605,19 +748,33 @@ def main():
             cam.next_mode()
         _c_was_down = key_pressed('c')
 
+        if key_pressed('p') and not _p_was_down:
+            roi_selector.enable()
+            print("[ROI] Arrastra en 'Stereo Left' para seleccionar el globo")
+        _p_was_down = key_pressed('p')
+
+
         # --- Update bola ---
         world_pos = None
         try:
-            world_pos = ball_queue.get_nowait()
+            while True:
+                world_pos = ball_queue.get_nowait()
         except queue.Empty:
             pass
+
+        if world_pos is None:
+            with _ball_lock:
+                if _ball_latest is not None and (now - _ball_latest_ts) < 0.5:
+                    world_pos = _ball_latest
 
         if world_pos is not None:
             _ball_seen = True
             # world_pos en cm: x ∈ [0, PLAY_AREA_WIDTH], y ∈ [0, PLAY_AREA_HEIGHT]
             x_pb = (world_pos[0] / config.PLAY_AREA_WIDTH  - 0.5) * FIELD_WIDTH
             y_pb = (world_pos[1] / config.PLAY_AREA_HEIGHT - 0.5) * FIELD_LENGTH
-            _ball_pb_pos = [x_pb, y_pb, 0.18]
+            z_cm = abs(float(world_pos[2]))
+            z_pb = max(BALL_RADIUS, z_cm * WORLD_TO_PB)
+            _ball_pb_pos = [x_pb, y_pb, z_pb]
             p.resetBasePositionAndOrientation(
                 ball_id, _ball_pb_pos, [0, 0, 0, 1]
             )
@@ -633,6 +790,7 @@ def main():
                 pass
             _msg_text_id = None
         _gol_cooldown = max(0.0, _gol_cooldown - dt)
+        _score_cooldown = max(0.0, _score_cooldown - dt)
 
         # ── Detección GOL ──
         bx, by, bz = _ball_pb_pos
@@ -646,10 +804,31 @@ def main():
                 show_message("  ¡¡ GOL !!", color=(1, 0.9, 0))
                 _gol_cooldown = 3.0
 
+        # ── Velocidad de la bola ──
+        if _ball_last_pos is not None:
+            dp = np.array(_ball_pb_pos) - np.array(_ball_last_pos)
+            _ball_speed = float(np.linalg.norm(dp) / max(dt, 1e-6))
+        _ball_last_pos = list(_ball_pb_pos)
+
+        # ── Deteccion de bola atrapada (simplificada) ──
+        if _ball_seen and _score_cooldown == 0.0:
+            ball_pos_arr = np.array(_ball_pb_pos)
+            is_above_car = ball_pos_arr[2] > CAR_TOP_Z
+            is_stopped = _ball_speed < 0.05
+            if is_above_car and is_stopped:
+                _score_timer += dt
+            else:
+                _score_timer = 0.0
+
+            if _score_timer >= 2.0:
+                show_message("Bola atrapada", color=(0.2, 1.0, 0.3))
+                _score_cooldown = 3.0
+                _score_timer = 0.0
+
         # ── Detección Bola interceptada ──
         # Solo cuando la bola ha sido vista al menos una vez por las cámaras
         if _ball_seen:
-            car_pos_arr = np.array([car.x, car.y, 0.19])
+            car_pos_arr = np.array([car.x, car.y, CAR_Z_CENTER])
             ball_pos_arr = np.array(_ball_pb_pos)
             dist = float(np.linalg.norm(car_pos_arr - ball_pos_arr))
             if dist < 0.65 and _msg_timer <= 0:
@@ -660,13 +839,24 @@ def main():
         # ═══════════════════════════════════════════════════════════════
         try:
             fl = stereo_left_queue.get_nowait()
-            cv2.imshow("Stereo Left", fl)
+            last_left_frame = fl
+            if not left_window_ready:
+                cv2.namedWindow(left_window, cv2.WINDOW_NORMAL)
+                cv2.setMouseCallback(left_window, roi_selector.on_mouse)
+                left_window_ready = True
+            if roi_selector.enabled:
+                roi_selector.draw(fl)
+            cv2.imshow(left_window, fl)
         except queue.Empty:
             pass
         
         try:
             fr = stereo_right_queue.get_nowait()
-            cv2.imshow("Stereo Right", fr)
+            if not right_window_ready:
+                cv2.namedWindow(right_window, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(right_window, 480, 360)
+                right_window_ready = True
+            cv2.imshow(right_window, fr)
         except queue.Empty:
             pass
         
@@ -700,7 +890,16 @@ def main():
         
         # Necesario en macOS para que OpenCV procese eventos de ventana
         cv2.waitKey(1)
-        
+
+        if roi_selector.ready and last_left_frame is not None:
+            roi = roi_selector.get_roi()
+            if roi is not None:
+                if _set_hsv_from_roi(last_left_frame, roi):
+                    print("[ROI] HSV del globo actualizado")
+                else:
+                    print("[ROI] Seleccion invalida")
+            roi_selector.disable()
+
         time.sleep(max(0, 0.016 - dt))
     
     p.disconnect()
