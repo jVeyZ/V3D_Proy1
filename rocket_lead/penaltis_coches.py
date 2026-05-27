@@ -14,7 +14,6 @@ import queue
 import game_config as config
 
 # Garantiza que las rutas relativas (assets/) funcionen
-# independientemente del directorio desde el que se lanza el script
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # ─── Queues para comunicación entre hilos ───
@@ -23,14 +22,20 @@ stereo_left_queue = queue.Queue(maxsize=2)
 stereo_right_queue = queue.Queue(maxsize=2)
 gesture_queue = queue.Queue(maxsize=2)
 
-# ─── Estado ArUco compartido (stereo_worker → main thread) ───
+# ─── Estado ArUco compartido ───
 _aruco_lock = threading.Lock()
-_aruco_ids = {"left": set(), "right": set()}   # IDs detectados actualmente
+_aruco_ids = {"left": set(), "right": set()}
 
 _hsv_lock = threading.Lock()
+_hsv_updated = False
 _ball_lock = threading.Lock()
 _ball_latest = None
 _ball_latest_ts = 0.0
+
+_car_lock = threading.Lock()
+_car_pose = None
+_car_wire_verts = None
+_car_wire_edges = None
 
 
 # ─────────────────────────────────────────────
@@ -51,7 +56,18 @@ CAR_TOP_Z = CAR_Z_CENTER + CAR_COL_HALF[2]
 BALL_RADIUS = 0.40
 BALL_COLOR = [0.0, 0.9, 0.0, 0.6]
 WORLD_TO_PB = FIELD_WIDTH / config.PLAY_AREA_WIDTH
+Z_SCALE = 0.05
 HSV_MARGIN = np.array([12, 50, 50], dtype=np.int32)
+BALL_SMOOTH_ALPHA = 0.35
+BALL_MAX_JUMP = 1.2
+Z_DEADZONE_CM = 1.5
+Z_MAX_STEP_CM = 3.0
+HOLD_LAST_SEC = 1.5
+XY_MARGIN_CM = 5.0
+Z_MAX_HEIGHT_CM = 60.0
+Z_ABS_MAX_CM = 150.0
+GROUND_LOCK_CM = 2.0
+GROUND_ADAPT_ALPHA = 0.15
 
 
 # ─────────────────────────────────────────────
@@ -59,43 +75,33 @@ HSV_MARGIN = np.array([12, 50, 50], dtype=np.int32)
 # ─────────────────────────────────────────────
 def create_field_texture(path="assets/field_texture.png"):
     os.makedirs("assets", exist_ok=True)
-    W, H = 512, 768   # proporción 8:12 del campo
+    W, H = 512, 768
     img = np.zeros((H, W, 3), dtype=np.uint8)
 
-    # Franjas alternas (verde oscuro / verde claro) en dirección larga
     stripe_h = H // 12
     for i in range(12):
         c = (30, 120, 30) if i % 2 == 0 else (45, 160, 45)
         img[i*stripe_h:(i+1)*stripe_h, :] = c
 
     white = (255, 255, 255)
-    lw = 3   # grosor líneas
+    lw = 3
 
     margin_x = int(W * 0.04)
     margin_y = int(H * 0.04)
 
-    # Borde exterior
     cv2.rectangle(img, (margin_x, margin_y), (W-margin_x, H-margin_y), white, lw)
-
-    # Línea central
     cy = H // 2
     cv2.line(img, (margin_x, cy), (W-margin_x, cy), white, lw)
-
-    # Círculo central  (radio ~1.5m → ~12% del ancho)
     cr = int(W * 0.12)
     cv2.circle(img, (W//2, cy), cr, white, lw)
     cv2.circle(img, (W//2, cy), 4, white, -1)
 
-    # Áreas de penalti (2m alto = H/6, 4m ancho = W/2)
     pa_h = int(H * 0.14)
     pa_w = int(W * 0.50)
     px0 = W//2 - pa_w//2
-    # Arriba
     cv2.rectangle(img, (px0, margin_y), (px0+pa_w, margin_y+pa_h), white, lw)
-    # Abajo
     cv2.rectangle(img, (px0, H-margin_y-pa_h), (px0+pa_w, H-margin_y), white, lw)
 
-    # Área pequeña (portería)
     ga_h = int(H * 0.055)
     ga_w = int(W * 0.25)
     gx0 = W//2 - ga_w//2
@@ -113,13 +119,12 @@ def init_simulation():
     use_gui = os.environ.get("PYBULLET_DIRECT") not in ("1", "true", "TRUE")
     physicsClient = p.connect(p.GUI if use_gui else p.DIRECT)
     p.configureDebugVisualizer(p.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)
-    p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)          # oculta ejes y paneles
+    p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
     p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 0)
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -9.8)
     p.resetDebugVisualizerCamera(15, 60, -30, [0, 0, 0])
     
-    # Suelo
     field_tex = create_field_texture()
     plane_shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[FIELD_WIDTH/2, FIELD_LENGTH/2, 0.01])
     plane_visual = p.createVisualShape(
@@ -140,99 +145,49 @@ def init_simulation():
 
 
 def create_simple_goals():
-    """
-    Portería con arco blanco mirando al interior del campo
-    y red semitransparente hacia el exterior.
-
-    Eje Y del campo: -FIELD_LENGTH/2 (fondo) … +FIELD_LENGTH/2 (frente)
-      - Portería norte (y > 0): arco en y_line, red más allá hacia +Y
-      - Portería sur  (y < 0): arco en y_line, red más allá hacia -Y
-    """
-    post_r    = 0.05          # radio de los postes
-    cross_r   = 0.04          # radio del larguero
+    post_r = 0.05
+    cross_r = 0.04
 
     configs = [
-        ( FIELD_LENGTH / 2 - 0.05,  +1),   # portería norte, red va a +Y
-        (-FIELD_LENGTH / 2 + 0.05,  -1),   # portería sur,   red va a -Y
+        (FIELD_LENGTH / 2 - 0.05, +1),
+        (-FIELD_LENGTH / 2 + 0.05, -1),
     ]
 
-    post_col = p.createCollisionShape(p.GEOM_CYLINDER,
-                                       radius=post_r, height=GOAL_HEIGHT)
-    post_vis = p.createVisualShape(p.GEOM_CYLINDER,
-                                    radius=post_r, length=GOAL_HEIGHT,
-                                    rgbaColor=[1, 1, 1, 1])
+    post_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=post_r, height=GOAL_HEIGHT)
+    post_vis = p.createVisualShape(p.GEOM_CYLINDER, radius=post_r, length=GOAL_HEIGHT, rgbaColor=[1, 1, 1, 1])
 
-    cross_col = p.createCollisionShape(p.GEOM_BOX,
-                                        halfExtents=[GOAL_WIDTH / 2 + post_r,
-                                                     cross_r, cross_r])
-    cross_vis = p.createVisualShape(p.GEOM_BOX,
-                                     halfExtents=[GOAL_WIDTH / 2 + post_r,
-                                                  cross_r, cross_r],
-                                     rgbaColor=[1, 1, 1, 1])
+    cross_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[GOAL_WIDTH / 2 + post_r, cross_r, cross_r])
+    cross_vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[GOAL_WIDTH / 2 + post_r, cross_r, cross_r], rgbaColor=[1, 1, 1, 1])
 
     for y_line, net_dir in configs:
-        # Postes izquierdo y derecho
         for x_sign in (-1, 1):
-            p.createMultiBody(0, post_col, post_vis,
-                              [x_sign * GOAL_WIDTH / 2, y_line, GOAL_HEIGHT / 2])
+            p.createMultiBody(0, post_col, post_vis, [x_sign * GOAL_WIDTH / 2, y_line, GOAL_HEIGHT / 2])
+        p.createMultiBody(0, cross_col, cross_vis, [0, y_line, GOAL_HEIGHT])
 
-        # Larguero
-        p.createMultiBody(0, cross_col, cross_vis,
-                          [0, y_line, GOAL_HEIGHT])
-
-        # Red (cubo semitransparente) hacia el exterior del campo
         net_cy = y_line + net_dir * GOAL_DEPTH / 2
-        net_col = p.createCollisionShape(p.GEOM_BOX,
-                                          halfExtents=[GOAL_WIDTH / 2,
-                                                       GOAL_DEPTH / 2,
-                                                       GOAL_HEIGHT / 2])
-        net_vis = p.createVisualShape(p.GEOM_BOX,
-                                       halfExtents=[GOAL_WIDTH / 2,
-                                                    GOAL_DEPTH / 2,
-                                                    GOAL_HEIGHT / 2],
-                                       rgbaColor=[0.85, 0.85, 0.85, 0.25])
-        p.createMultiBody(0, net_col, net_vis,
-                          [0, net_cy, GOAL_HEIGHT / 2])
-
+        net_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[GOAL_WIDTH / 2, GOAL_DEPTH / 2, GOAL_HEIGHT / 2])
+        net_vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[GOAL_WIDTH / 2, GOAL_DEPTH / 2, GOAL_HEIGHT / 2], rgbaColor=[0.85, 0.85, 0.85, 0.25])
+        p.createMultiBody(0, net_col, net_vis, [0, net_cy, GOAL_HEIGHT / 2])
     return []
 
 
 def create_field_boundaries():
     wall_h, wall_thick = 1.0, 0.1
     red = [0.85, 0.1, 0.1, 1.0]
-    # Paredes laterales (eje X)
     for x in [-FIELD_WIDTH/2 - wall_thick, FIELD_WIDTH/2 + wall_thick]:
         col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[wall_thick, FIELD_LENGTH/2, wall_h])
-        vis = p.createVisualShape(p.GEOM_BOX,   halfExtents=[wall_thick, FIELD_LENGTH/2, wall_h],
-                                   rgbaColor=red)
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[wall_thick, FIELD_LENGTH/2, wall_h], rgbaColor=red)
         p.createMultiBody(0, col, vis, [x, 0, wall_h/2])
-    # Paredes de fondo (eje Y)
     for y in [-FIELD_LENGTH/2 - wall_thick, FIELD_LENGTH/2 + wall_thick]:
         col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[FIELD_WIDTH/2, wall_thick, wall_h])
-        vis = p.createVisualShape(p.GEOM_BOX,   halfExtents=[FIELD_WIDTH/2, wall_thick, wall_h],
-                                   rgbaColor=red)
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[FIELD_WIDTH/2, wall_thick, wall_h], rgbaColor=red)
         p.createMultiBody(0, col, vis, [0, y, wall_h/2])
 
 
 def create_car():
-    """
-    Coche con mesh OBJ (colores del .mtl) + caja de colisión.
-
-    El mesh Blender tiene Y=up, Z=largo. PyBullet usa Z=up, Y=adelante.
-    Corrección: R_x(90°) baked en MESH_EXTRA_RPY.
-
-    En CarController.update() el quaternion de orientación = R_z(heading) * R_x(90°)
-    para que la rotación visual sea siempre correcta.
-
-    Ajustes si algo no cuadra visualmente:
-      MESH_YAW  = np.pi   → morro apunta al revés
-      z_center  += 0.05   → coche flota  /  -= 0.05 → se hunde
-      SCALE     *= 1.1    → coche demasiado pequeño
-    """
-    SCALE       = 0.24
-    z_center    = 0.19
-    MESH_YAW    = np.pi
-
+    SCALE = 0.24
+    z_center = 0.19
+    MESH_YAW = np.pi
     start_y = -FIELD_LENGTH / 2 + 1.5
 
     col = p.createCollisionShape(p.GEOM_BOX, halfExtents=CAR_COL_HALF)
@@ -242,9 +197,7 @@ def create_car():
         meshScale=[CAR_MESH_SCALE, CAR_MESH_SCALE, CAR_MESH_SCALE]
     )
 
-    # Orientación inicial = R_z(0) * R_x(90°)
     base_orn = p.getQuaternionFromEuler([np.pi / 2, 0, MESH_YAW])
-
     car_id = p.createMultiBody(
         baseMass=0,
         baseCollisionShapeIndex=col,
@@ -270,9 +223,9 @@ def create_tracked_ball():
 from pynput import keyboard as pynput_kb
 
 # ─────────────────────────────────────────────
-# TECLADO FIABLE (pynput — independiente de PyBullet)
+# TECLADO FIABLE (pynput)
 # ─────────────────────────────────────────────
-_keys_down = set()   # conjunto de teclas actualmente pulsadas
+_keys_down = set()
 
 def _on_press(key):
     try:
@@ -291,20 +244,14 @@ _kb_listener.start()
 
 def key_pressed(c):
     return c in _keys_down
+
+
 class CarController:
     def __init__(self, car_id):
         self.car_id = car_id
         self.x = 0.0
         self.y = -FIELD_LENGTH / 2 + 1.5
-        self.heading = 0.0   # 0 = nariz roja apunta a +Y global
-
-    # Nuestro propio estado de teclas — ignora KEY_IS_DOWN de PyBullet
-    # que queda pegado cuando hay lag. Solo KEY_WAS_TRIGGERED / KEY_WAS_RELEASED.
-    _key_state = {}
-
-    _key_state    = {}
-    _key_time     = {}
-    KEY_TIMEOUT   = 0.5
+        self.heading = 0.0
 
     def update(self, dt):
         dt = min(dt, 0.05)
@@ -333,11 +280,7 @@ class CarController:
         _, orn = p.multiplyTransforms([0,0,0], q_z, [0,0,0], q_x)
         p.resetBasePositionAndOrientation(self.car_id, [self.x, self.y, z], orn)
 
-        # Devolver raw de PyBullet solo para Q/R/C del bucle principal
-        raw = p.getKeyboardEvents()
-        return raw, [self.x, self.y, z]
-
-
+        return {}, [self.x, self.y, z]
 
 
 # ─────────────────────────────────────────────
@@ -358,8 +301,55 @@ def draw_aruco_debug(frame, corners, ids):
     return frame
 
 
+def _detect_markers(detector, gray, aruco_dict, aruco_params):
+    if detector == "legacy" or detector is None:
+        return cv2.aruco.detectMarkers(gray, aruco_dict, parameters=aruco_params)
+    return detector.detectMarkers(gray)
+
+
+def _load_obj_wireframe(path):
+    if not os.path.exists(path):
+        return None, None
+    verts = []
+    edges = set()
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if line.startswith("v "):
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    try:
+                        verts.append([float(parts[1]), float(parts[2])])
+                    except ValueError:
+                        pass
+            elif line.startswith("f "):
+                parts = line.strip().split()[1:]
+                idxs = []
+                for p in parts:
+                    try:
+                        idx = int(p.split("/")[0]) - 1
+                        idxs.append(idx)
+                    except ValueError:
+                        pass
+                for i in range(len(idxs)):
+                    a = idxs[i]
+                    b = idxs[(i + 1) % len(idxs)]
+                    if a != b:
+                        edges.add((min(a, b), max(a, b)))
+    if len(verts) < 3 or len(edges) == 0:
+        return None, None
+    v = np.array(verts, dtype=np.float64)
+    min_xy = v.min(axis=0)
+    max_xy = v.max(axis=0)
+    size = max(max_xy - min_xy)
+    if size <= 1e-9:
+        return None, None
+    center = (min_xy + max_xy) * 0.5
+    v = (v - center) / size
+    return v, list(edges)
+
+
 # ─────────────────────────────────────────────
-# HILO ESTÉREO (sin cv2.imshow)
+# HILO ESTÉREO
 # ─────────────────────────────────────────────
 def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
     from ball_tracker import StereoGreenTracker
@@ -383,29 +373,34 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
     tracker = StereoGreenTracker()
     reconstructor = Stereo3DReconstructor()
     
-    # ArUco detector
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
     try:
         aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
     except AttributeError:
-        aruco_detector = None
+        aruco_detector = "legacy"
     
-    # Calibración
-    print("[CAM] Buscando 4 marcadores ArUco...")
+    print("[CAM] Iniciando — calibración continua por ArUco")
     calibrated = False
-    attempts = 0
-    while not calibrated and attempts < 300:
-        ret_l, frame_l = cap_l.read()
-        ret_r, frame_r = cap_r.read()
-        if ret_l and ret_r:
-            calibrated = reconstructor.calibrate_from_aruco(frame_l, frame_r)
-        attempts += 1
-        if not calibrated:
-            time.sleep(0.033)
+    cache_left = {}
+    cache_right = {}
+    frame_count = 0
+    calib_locked = False
+    homography_left = None
+    homography_refresh_every = 15
+    homography_left_inv = None
+    homography_right = None
+    homography_right_inv = None
+    aruco_every = 5
+    aruco_tick = 0
+    last_corners_l = None
+    last_corners_r = None
+    last_ids_l = None
+    last_ids_r = None
     
-    print(f"[CAM] Stereo: {'CALIBRADO' if calibrated else 'NO CALIBRADO'}")
-    
+    last_xy_world = None
+    last_z_world = None
+
     while True:
         ret_l, frame_l = cap_l.read()
         ret_r, frame_r = cap_r.read()
@@ -413,13 +408,22 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
             time.sleep(0.001)
             continue
         
-        # Dibujar ArUcos
         if aruco_detector is not None:
-            corners_l, ids_l, _ = aruco_detector.detectMarkers(cv2.cvtColor(frame_l, cv2.COLOR_BGR2GRAY))
-            corners_r, ids_r, _ = aruco_detector.detectMarkers(cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY))
+            aruco_tick += 1
+            do_aruco = (aruco_tick % aruco_every == 0)
+            if do_aruco:
+                gray_l = cv2.cvtColor(frame_l, cv2.COLOR_BGR2GRAY)
+                gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
+                corners_l, ids_l, _ = _detect_markers(aruco_detector, gray_l, aruco_dict, aruco_params)
+                corners_r, ids_r, _ = _detect_markers(aruco_detector, gray_r, aruco_dict, aruco_params)
+                last_corners_l, last_ids_l = corners_l, ids_l
+                last_corners_r, last_ids_r = corners_r, ids_r
+            else:
+                corners_l, ids_l = last_corners_l, last_ids_l
+                corners_r, ids_r = last_corners_r, last_ids_r
+
             frame_l = draw_aruco_debug(frame_l, corners_l, ids_l)
             frame_r = draw_aruco_debug(frame_r, corners_r, ids_r)
-            # Contador de ArUcos visibles
             n_l = len(ids_l) if ids_l is not None else 0
             n_r = len(ids_r) if ids_r is not None else 0
             for frame, n, name in [(frame_l, n_l, "L"), (frame_r, n_r, "R")]:
@@ -428,29 +432,138 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                 fh = frame.shape[0]
                 cv2.putText(frame, label, (10, fh - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
-            # Actualizar estado compartido para la ventana de gestos
             with _aruco_lock:
                 _aruco_ids["left"]  = set(ids_l.flatten().tolist()) if ids_l is not None else set()
                 _aruco_ids["right"] = set(ids_r.flatten().tolist()) if ids_r is not None else set()
+
+            if do_aruco and ids_l is not None:
+                for i, mid in enumerate(ids_l.flatten()):
+                    cache_left[int(mid)] = corners_l[i][0].mean(axis=0)
+            if do_aruco and ids_r is not None:
+                for i, mid in enumerate(ids_r.flatten()):
+                    cache_right[int(mid)] = corners_r[i][0].mean(axis=0)
+
+            frame_count += 1
+            ordered_ids = reconstructor.marker_ids_order
+            if (not calib_locked) and frame_count % 30 == 0 and \
+                all(mid in cache_left  for mid in ordered_ids) and \
+                all(mid in cache_right for mid in ordered_ids):
+                img_pts_l = np.array([cache_left[m]  for m in ordered_ids], dtype=np.float64)
+                img_pts_r = np.array([cache_right[m] for m in ordered_ids], dtype=np.float64)
+                obj_pts   = reconstructor._world_object_points_3d()
+                h_l, w_l  = frame_l.shape[:2]
+                h_r, w_r  = frame_r.shape[:2]
+                K_l = reconstructor._estimate_camera_matrix(w_l, h_l, reconstructor.fov_deg)
+                K_r = reconstructor._estimate_camera_matrix(w_r, h_r, reconstructor.fov_deg)
+
+                ok_l, rvec_l, tvec_l = cv2.solvePnP(
+                    obj_pts, img_pts_l, K_l, reconstructor.dist_left,
+                    flags=cv2.SOLVEPNP_ITERATIVE)
+                ok_r, rvec_r, tvec_r = cv2.solvePnP(
+                    obj_pts, img_pts_r, K_r, reconstructor.dist_right,
+                    flags=cv2.SOLVEPNP_ITERATIVE)
+
+                print(f"[CAL] solvePnP ok_l={ok_l} ok_r={ok_r}")
+                if ok_l and ok_r:
+                    R_l, _ = cv2.Rodrigues(rvec_l)
+                    R_r, _ = cv2.Rodrigues(rvec_r)
+                    reconstructor.K_left  = K_l
+                    reconstructor.K_right = K_r
+                    reconstructor.P_left  = K_l @ np.hstack([R_l, tvec_l])
+                    reconstructor.P_right = K_r @ np.hstack([R_r, tvec_r])
+                    reconstructor._calibrated = True
+                    if not calibrated:
+                        print("[CAL] ✓ Stereo calibrado")
+                    calibrated = True
+                    calib_locked = True
+
+            if frame_count % homography_refresh_every == 0:
+                if all(mid in cache_left for mid in ordered_ids):
+                    img_pts_l = np.array([cache_left[m] for m in ordered_ids], dtype=np.float64)
+                    H_cache, _ = cv2.findHomography(img_pts_l, config.WORLD_CORNERS, cv2.RANSAC, 5.0)
+                    if H_cache is not None:
+                        homography_left = H_cache
+                        try:
+                            homography_left_inv = np.linalg.inv(H_cache)
+                        except np.linalg.LinAlgError:
+                            homography_left_inv = None
+                if all(mid in cache_right for mid in ordered_ids):
+                    img_pts_r = np.array([cache_right[m] for m in ordered_ids], dtype=np.float64)
+                    H_cache, _ = cv2.findHomography(img_pts_r, config.WORLD_CORNERS, cv2.RANSAC, 5.0)
+                    if H_cache is not None:
+                        homography_right = H_cache
+                        try:
+                            homography_right_inv = np.linalg.inv(H_cache)
+                        except np.linalg.LinAlgError:
+                            homography_right_inv = None
+
+            if homography_left is not None and homography_left_inv is None:
+                try:
+                    homography_left_inv = np.linalg.inv(homography_left)
+                except np.linalg.LinAlgError:
+                    homography_left_inv = None
+            if homography_right is not None and homography_right_inv is None:
+                try:
+                    homography_right_inv = np.linalg.inv(homography_right)
+                except np.linalg.LinAlgError:
+                    homography_right_inv = None
         
         # Tracking
+        with _hsv_lock:
+            global _hsv_updated
+            if _hsv_updated:
+                tracker.reset()
+                _hsv_updated = False
         det_l, det_r = tracker.update(frame_l, frame_r)
         pos_3d = None
         mode_label = None
+        xy_world = None
+
+        # Homografía: usar cache si existe
+
+        # Fallback XY con homografía cacheada (NO requiere ArUcos visibles)
+        if det_l is not None and homography_left is not None:
+            pt = np.array([det_l[0], det_l[1], 1.0], dtype=np.float64)
+            w = homography_left @ pt
+            if abs(w[2]) > 1e-10:
+                xy_world = np.array([w[0] / w[2], w[1] / w[2]], dtype=np.float64)
+
+        if xy_world is None and det_r is not None and homography_right is not None:
+            pt = np.array([det_r[0], det_r[1], 1.0], dtype=np.float64)
+            w = homography_right @ pt
+            if abs(w[2]) > 1e-10:
+                xy_world = np.array([w[0] / w[2], w[1] / w[2]], dtype=np.float64)
+
+        if xy_world is not None:
+            last_xy_world = xy_world
+
+        # ── Cálculo de pos_3d: XY de homografía + Z de triangulación ──
+        tri = None
         if calibrated and det_l is not None and det_r is not None:
-            pos_3d = reconstructor.triangulate(det_l[:2], det_r[:2])
-            if pos_3d is not None:
-                mode_label = "TRIANG"
-        if pos_3d is None and det_l is not None:
-            img_pts = reconstructor._detect_ordered_marker_centers(frame_l)
-            if img_pts is not None:
-                H, _ = cv2.findHomography(img_pts, config.WORLD_CORNERS, cv2.RANSAC, 5.0)
-                if H is not None:
-                    pt = np.array([det_l[0], det_l[1], 1.0], dtype=np.float64)
-                    w = H @ pt
-                    if abs(w[2]) > 1e-10:
-                        pos_3d = np.array([w[0] / w[2], w[1] / w[2], config.BALL_REAL_RADIUS_CM])
-                        mode_label = "HOMOG"
+            tri = reconstructor.triangulate(det_l[:2], det_r[:2])
+            if tri is not None and np.isfinite(tri).all():
+                if all(abs(tri) < 300):
+                    if xy_world is None and last_xy_world is not None:
+                        xy_world = last_xy_world
+                    if xy_world is not None:
+                        pos_3d = np.array([
+                            xy_world[0],
+                            xy_world[1],
+                            tri[2]
+                        ], dtype=np.float64)
+                    else:
+                        pos_3d = tri.copy()
+                    mode_label = "3D+H"
+                    last_z_world = float(tri[2])
+                else:
+                    tri = None
+
+        if pos_3d is None and xy_world is not None:
+            z_use = last_z_world if last_z_world is not None else config.BALL_REAL_RADIUS_CM
+            pos_3d = np.array([xy_world[0], xy_world[1], z_use],
+                              dtype=np.float64)
+            mode_label = "HOMOG+Z" if last_z_world is not None else "HOMOG"
+
         if pos_3d is not None:
             with _ball_lock:
                 global _ball_latest, _ball_latest_ts
@@ -470,18 +583,77 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
         
         # Info en frames
         status = "OK" if calibrated else "NO CAL"
-        for frame, det, name in [(frame_l, det_l, "L"), (frame_r, det_r, "R")]:
+        for frame, det, name, tracker_side in [
+            (frame_l, det_l, "L", tracker.left),
+            (frame_r, det_r, "R", tracker.right)
+        ]:
             if det is not None:
-                tracker.left.draw_detection(frame, det)
-                tracker.left.draw_trail(frame)
+                tracker_side.draw_detection(frame, det)
+                tracker_side.draw_trail(frame)
                 cv2.putText(frame, "BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
             else:
                 cv2.putText(frame, "NO BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
             if mode_label is not None:
                 cv2.putText(frame, mode_label, (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 0), 2)
             cv2.putText(frame, f"[{status}] {name}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,200,255), 1)
+            if pos_3d is not None:
+                cv2.putText(frame, f"Z={pos_3d[2]:.1f}cm", (10, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,0), 2)
+
+        # ── AR Car Overlay (2D directo con homografía) ──
+        with _car_lock:
+            car_pose = _car_pose
+        if car_pose is not None and (homography_left_inv is not None or homography_right_inv is not None):
+            x_pb, y_pb, heading = car_pose
+
+            # Convertir posición PyBullet → cm del tablero
+            x_cm = (x_pb / FIELD_WIDTH + 0.5) * config.PLAY_AREA_WIDTH
+            y_cm = (y_pb / FIELD_LENGTH + 0.5) * config.PLAY_AREA_HEIGHT
+
+            # Tamaño del coche en cm (ajústalo a tu coche real)
+            car_w_cm = 12.0   # ancho
+            car_l_cm = 18.0  # largo
+
+            # Esquinas del coche en coordenadas del tablero (cm)
+            # El coche apunta hacia +Y cuando heading=0
+            corners_cm = np.array([
+                [-car_w_cm/2, -car_l_cm/2],
+                [ car_w_cm/2, -car_l_cm/2],
+                [ car_w_cm/2,  car_l_cm/2],
+                [-car_w_cm/2,  car_l_cm/2],
+            ], dtype=np.float64)
+
+            # Rotar según heading
+            cos_h = np.cos(heading + np.pi)  # +pi porque el mesh está girado
+            sin_h = np.sin(heading + np.pi)
+            rot = np.array([[cos_h, -sin_h], [sin_h, cos_h]], dtype=np.float64)
+            corners_rot = corners_cm @ rot.T + np.array([x_cm, y_cm])
+
+            # Proyectar a imagen usando la homografía cacheada
+            # H: mundo(cm) → imagen(px), necesitamos H_inv: imagen → mundo
+            # Así que usamos la inversa
+            for frame_target, H_inv in [(frame_l, homography_left_inv), (frame_r, homography_right_inv)]:
+                if H_inv is None:
+                    continue
+                pts_px = []
+                for cx, cy in corners_rot:
+                    pt_world = np.array([cx, cy, 1.0], dtype=np.float64)
+                    pt_img = H_inv @ pt_world
+                    if abs(pt_img[2]) > 1e-10:
+                        px = int(pt_img[0] / pt_img[2])
+                        py = int(pt_img[1] / pt_img[2])
+                        pts_px.append([px, py])
+
+                if len(pts_px) == 4:
+                    pts = np.array(pts_px, dtype=np.int32)
+                    cv2.polylines(frame_target, [pts], True, (0, 255, 255), 2)
+                    front = (pts[2] + pts[3]) // 2
+                    cv2.circle(frame_target, tuple(front), 6, (0, 0, 255), -1)
+                    center = pts.mean(axis=0).astype(int)
+                    cv2.circle(frame_target, tuple(center), 3, (255, 0, 0), -1)
+                    cv2.putText(frame_target, "CAR", tuple(pts[0]),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
-        # Enviar a main thread (NO cv2.imshow aquí)
         try:
             left_frame_q.put_nowait(frame_l)
             right_frame_q.put_nowait(frame_r)
@@ -490,7 +662,7 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
 
 
 # ─────────────────────────────────────────────
-# HILO GESTOS (sin cv2.imshow)
+# HILO GESTOS
 # ─────────────────────────────────────────────
 def gesture_worker(frame_q):
     gesture_available = False
@@ -512,11 +684,10 @@ def gesture_worker(frame_q):
                     except queue.Full:
                         pass
                 time.sleep(0.03)
-            return  # sólo llega aquí si el bucle termina (no ocurre normalmente)
+            return
         else:
             print("[GESTURE] GestureRobotController no pudo iniciarse; fallback a cámara en bruto")
 
-    # ── Fallback: mostrar la cámara de gestos en bruto sin reconocimiento ──
     cap = cv2.VideoCapture(config.CAMERA_GESTURE)
     if not cap.isOpened():
         print(f"[GESTURE] No se pudo abrir cámara {config.CAMERA_GESTURE}")
@@ -527,8 +698,7 @@ def gesture_worker(frame_q):
     while True:
         ret, frame = cap.read()
         if ret:
-            reason = "Sin MediaPipe" if not gesture_available else "Tracker no iniciado"
-            cv2.putText(frame, f"GESTURE CAM [{reason}]", (10, 30),
+            cv2.putText(frame, f"GESTURE CAM [Sin MediaPipe]", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             try:
                 frame_q.put_nowait(frame)
@@ -640,11 +810,11 @@ def _set_hsv_from_roi(frame_bgr, roi):
     lower = np.clip(center - HSV_MARGIN, 0, 255).astype(np.uint8)
     upper = np.clip(center + HSV_MARGIN, 0, 255).astype(np.uint8)
     with _hsv_lock:
+        global _hsv_updated
         config.BALL_GREEN_HSV_LOWER = lower
         config.BALL_GREEN_HSV_UPPER = upper
+        _hsv_updated = True
     return True
-
-
 
 
 # ─────────────────────────────────────────────
@@ -660,6 +830,7 @@ def main():
     print("  A / D     : Girar sobre el centro")
     print("  R         : Reset")
     print("  C         : Cambiar cámara")
+    print("  G         : Calibrar suelo (poner bola en el suelo y pulsar)")
     print("  Q / ESC   : Salir")
     print("\nIniciando...")
     
@@ -668,7 +839,11 @@ def main():
     cam = CameraController()
     ball_id = create_tracked_ball()
     
-    # Lanzar hilos (daemon=True para que mueran al cerrar main)
+    # Inicializar pose del coche para AR
+    with _car_lock:
+        _car_pose = (car.x, car.y, car.heading)
+    
+    # Lanzar hilos
     t_stereo = threading.Thread(
         target=stereo_worker, 
         args=(config.CAMERA_LEFT, config.CAMERA_RIGHT, 
@@ -689,6 +864,8 @@ def main():
     _r_was_down = False
     _c_was_down = False
     _p_was_down = False
+    _g_was_down = False
+    _g_request = False
 
     roi_selector = ROISelector()
     left_window = "Stereo Left"
@@ -697,40 +874,21 @@ def main():
     right_window_ready = False
     last_left_frame = None
 
-    # ── Estado de eventos de juego ──
-    _msg_text_id   = None   # ID del texto PyBullet en pantalla
-    _msg_timer     = 0.0    # segundos restantes del mensaje
-    _gol_cooldown  = 0.0    # evitar GOL repetido mientras la bola sigue dentro
-    _ball_pb_pos   = [0.0, 0.0, BALL_RADIUS]   # última posición conocida
-    _ball_seen     = False               # True en cuanto llega 1 world_pos real
-    _ball_last_pos = None
-    _ball_speed    = 0.0
-    _score_timer   = 0.0
-    _under_timer   = 0.0
-    _score_cooldown = 0.0
-
-    def show_message(text, color=(1, 1, 0)):
-        nonlocal _msg_text_id, _msg_timer
-        if _msg_text_id is not None:
-            try:
-                p.removeUserDebugItem(_msg_text_id)
-            except Exception:
-                pass
-        _msg_text_id = p.addUserDebugText(
-            text, [0, 0, 2.5],
-            textColorRGB=color, textSize=3,
-            lifeTime=0   # lo gestionamos nosotros
-        )
-        _msg_timer = 2.5
+    # Estado del juego
+    _ball_pb_pos   = [0.0, 0.0, BALL_RADIUS]
+    _ground_z_cm = None
+    _ball_smooth = None
+    _ball_smooth_z = None
 
     while running:
         now = time.time()
         dt = now - last_time
         last_time = now
 
-        # car.update() llama a getKeyboardEvents() internamente y devuelve el dict
         keys, car_pos = car.update(dt)
         cam.update(car_pos)
+        with _car_lock:
+            _car_pose = (car.x, car.y, car.heading)
 
         if key_pressed('q'):
             running = False
@@ -749,10 +907,23 @@ def main():
         _c_was_down = key_pressed('c')
 
         if key_pressed('p') and not _p_was_down:
-            roi_selector.enable()
-            print("[ROI] Arrastra en 'Stereo Left' para seleccionar el globo")
+            if last_left_frame is not None:
+                roi = cv2.selectROI(left_window, last_left_frame, fromCenter=False, showCrosshair=True)
+                if roi is not None and roi[2] > 5 and roi[3] > 5:
+                    if _set_hsv_from_roi(last_left_frame, roi):
+                        print("[ROI] HSV del globo actualizado")
+                    else:
+                        print("[ROI] Seleccion invalida")
+                else:
+                    print("[ROI] Seleccion invalida")
+            else:
+                print("[ROI] Espera a que llegue un frame en 'Stereo Left'")
         _p_was_down = key_pressed('p')
 
+        if key_pressed('g') and not _g_was_down:
+            _g_request = True
+            print("[BALL] Calibrando suelo: pon la bola en el suelo y pulsa G")
+        _g_was_down = key_pressed('g')
 
         # --- Update bola ---
         world_pos = None
@@ -764,75 +935,79 @@ def main():
 
         if world_pos is None:
             with _ball_lock:
-                if _ball_latest is not None and (now - _ball_latest_ts) < 0.5:
+                if _ball_latest is not None and (now - _ball_latest_ts) < HOLD_LAST_SEC:
                     world_pos = _ball_latest
 
         if world_pos is not None:
-            _ball_seen = True
-            # world_pos en cm: x ∈ [0, PLAY_AREA_WIDTH], y ∈ [0, PLAY_AREA_HEIGHT]
-            x_pb = (world_pos[0] / config.PLAY_AREA_WIDTH  - 0.5) * FIELD_WIDTH
-            y_pb = (world_pos[1] / config.PLAY_AREA_HEIGHT - 0.5) * FIELD_LENGTH
-            z_cm = abs(float(world_pos[2]))
-            z_pb = max(BALL_RADIUS, z_cm * WORLD_TO_PB)
-            _ball_pb_pos = [x_pb, y_pb, z_pb]
+            try:
+                x_cm = float(world_pos[0])
+                y_cm = float(world_pos[1])
+                z_cm = float(world_pos[2])
+            except Exception:
+                world_pos = None
+
+        if world_pos is not None and not np.isfinite([x_cm, y_cm, z_cm]).all():
+            world_pos = None
+
+        if world_pos is not None:
+            if (x_cm < -XY_MARGIN_CM or x_cm > config.PLAY_AREA_WIDTH + XY_MARGIN_CM or
+                y_cm < -XY_MARGIN_CM or y_cm > config.PLAY_AREA_HEIGHT + XY_MARGIN_CM or
+                abs(z_cm) > Z_ABS_MAX_CM):
+                world_pos = None
+
+        if world_pos is not None:
+            x_cm = min(max(x_cm, 0.0), config.PLAY_AREA_WIDTH)
+            y_cm = min(max(y_cm, 0.0), config.PLAY_AREA_HEIGHT)
+
+            if _g_request:
+                _ground_z_cm = z_cm
+                _ball_smooth_z = None
+                _g_request = False
+                print(f"[BALL] Suelo calibrado manual: {_ground_z_cm:.1f} cm")
+
+            if _ground_z_cm is None:
+                _ground_z_cm = z_cm
+                print(f"[BALL] Suelo inicial automático: {_ground_z_cm:.1f} cm")
+
+            height_cm = abs(z_cm - _ground_z_cm)
+            if height_cm < Z_DEADZONE_CM:
+                height_cm = 0.0
+            if height_cm < GROUND_LOCK_CM:
+                _ground_z_cm = (1.0 - GROUND_ADAPT_ALPHA) * _ground_z_cm + GROUND_ADAPT_ALPHA * z_cm
+            height_cm = min(height_cm, Z_MAX_HEIGHT_CM)
+
+            x_pb = (x_cm / config.PLAY_AREA_WIDTH  - 0.5) * FIELD_WIDTH
+            y_pb = (y_cm / config.PLAY_AREA_HEIGHT - 0.5) * FIELD_LENGTH
+            z_pb = BALL_RADIUS + height_cm * Z_SCALE
+
+            if _ball_smooth_z is None:
+                _ball_smooth_z = z_pb
+            else:
+                max_step = Z_MAX_STEP_CM * Z_SCALE
+                delta_z = z_pb - _ball_smooth_z
+                if abs(delta_z) > max_step:
+                    z_pb = _ball_smooth_z + np.sign(delta_z) * max_step
+                _ball_smooth_z += (z_pb - _ball_smooth_z) * 0.3
+                z_pb = _ball_smooth_z
+
+            raw_pos = np.array([x_pb, y_pb, z_pb], dtype=np.float64)
+            if _ball_smooth is None:
+                _ball_smooth = raw_pos
+            else:
+                delta = raw_pos - _ball_smooth
+                if np.linalg.norm(delta) > BALL_MAX_JUMP:
+                    raw_pos = _ball_smooth + delta * 0.2
+                _ball_smooth = _ball_smooth + (raw_pos - _ball_smooth) * BALL_SMOOTH_ALPHA
+
+            _ball_pb_pos = _ball_smooth.tolist()
+            _ball_smooth_z = float(_ball_smooth[2])
             p.resetBasePositionAndOrientation(
                 ball_id, _ball_pb_pos, [0, 0, 0, 1]
             )
 
         p.stepSimulation()
 
-        # ── Gestión timer del mensaje ──
-        _msg_timer -= dt
-        if _msg_timer <= 0 and _msg_text_id is not None:
-            try:
-                p.removeUserDebugItem(_msg_text_id)
-            except Exception:
-                pass
-            _msg_text_id = None
-        _gol_cooldown = max(0.0, _gol_cooldown - dt)
-        _score_cooldown = max(0.0, _score_cooldown - dt)
-
-        # ── Detección GOL ──
-        bx, by, bz = _ball_pb_pos
-        in_goal_x = abs(bx) < GOAL_WIDTH / 2
-        in_goal_z = bz < GOAL_HEIGHT + 0.1
-        if _gol_cooldown == 0.0 and in_goal_x and in_goal_z:
-            if by > FIELD_LENGTH / 2 - GOAL_DEPTH:
-                show_message("  ¡¡ GOL !!", color=(1, 0.9, 0))
-                _gol_cooldown = 3.0
-            elif by < -FIELD_LENGTH / 2 + GOAL_DEPTH:
-                show_message("  ¡¡ GOL !!", color=(1, 0.9, 0))
-                _gol_cooldown = 3.0
-
-        # ── Velocidad de la bola ──
-        if _ball_last_pos is not None:
-            dp = np.array(_ball_pb_pos) - np.array(_ball_last_pos)
-            _ball_speed = float(np.linalg.norm(dp) / max(dt, 1e-6))
-        _ball_last_pos = list(_ball_pb_pos)
-
-        # ── Deteccion de bola atrapada (simplificada) ──
-        if _ball_seen and _score_cooldown == 0.0:
-            ball_pos_arr = np.array(_ball_pb_pos)
-            is_above_car = ball_pos_arr[2] > CAR_TOP_Z
-            is_stopped = _ball_speed < 0.05
-            if is_above_car and is_stopped:
-                _score_timer += dt
-            else:
-                _score_timer = 0.0
-
-            if _score_timer >= 2.0:
-                show_message("Bola atrapada", color=(0.2, 1.0, 0.3))
-                _score_cooldown = 3.0
-                _score_timer = 0.0
-
-        # ── Detección Bola interceptada ──
-        # Solo cuando la bola ha sido vista al menos una vez por las cámaras
-        if _ball_seen:
-            car_pos_arr = np.array([car.x, car.y, CAR_Z_CENTER])
-            ball_pos_arr = np.array(_ball_pb_pos)
-            dist = float(np.linalg.norm(car_pos_arr - ball_pos_arr))
-            if dist < 0.65 and _msg_timer <= 0:
-                show_message("Bola interceptada", color=(0.2, 0.8, 1))
+        # Mensajes de juego desactivados
         
         # ═══════════════════════════════════════════════════════════════
         # MOSTRAR VENTANAS EN MAIN THREAD (macOS lo exige)
@@ -846,6 +1021,8 @@ def main():
                 left_window_ready = True
             if roi_selector.enabled:
                 roi_selector.draw(fl)
+                cv2.putText(fl, "ROI MODE", (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6, (0, 255, 255), 2)
             cv2.imshow(left_window, fl)
         except queue.Empty:
             pass
@@ -863,7 +1040,6 @@ def main():
         try:
             fg = gesture_queue.get_nowait()
             if fg is not None:
-                # ── Panel ArUco (IDs 0-3 esperados) ──────────────────────
                 with _aruco_lock:
                     detected = _aruco_ids["left"] | _aruco_ids["right"]
                     in_left  = _aruco_ids["left"].copy()
@@ -883,22 +1059,23 @@ def main():
                     row = panel_y + 30 + aid * 18
                     cv2.putText(fg, f"#{aid}: {where}", (panel_x, row),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
-                # ─────────────────────────────────────────────────────────
                 cv2.imshow("Gesture Robot", fg)
         except queue.Empty:
             pass
         
-        # Necesario en macOS para que OpenCV procese eventos de ventana
-        cv2.waitKey(1)
-
-        if roi_selector.ready and last_left_frame is not None:
-            roi = roi_selector.get_roi()
-            if roi is not None:
-                if _set_hsv_from_roi(last_left_frame, roi):
-                    print("[ROI] HSV del globo actualizado")
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('p'):
+            if last_left_frame is not None:
+                roi = cv2.selectROI(left_window, last_left_frame, fromCenter=False, showCrosshair=True)
+                if roi is not None and roi[2] > 5 and roi[3] > 5:
+                    if _set_hsv_from_roi(last_left_frame, roi):
+                        print("[ROI] HSV del globo actualizado")
+                    else:
+                        print("[ROI] Seleccion invalida")
                 else:
                     print("[ROI] Seleccion invalida")
-            roi_selector.disable()
+            else:
+                print("[ROI] Espera a que llegue un frame en 'Stereo Left'")
 
         time.sleep(max(0, 0.016 - dt))
     
