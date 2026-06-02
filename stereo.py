@@ -2,8 +2,7 @@
 
 import cv2
 import numpy as np
-
-import config
+import game_config as config 
 
 
 class Stereo3DReconstructor:
@@ -41,7 +40,26 @@ class Stereo3DReconstructor:
         self.tvec_left = None
         self.rvec_right = None
         self.tvec_right = None
+        self.R = None
+        self.T = None
         self._calibrated = False
+
+    def load_calibration(self, path):
+        try:
+            with np.load(path) as data:
+                self.K_left = data["K_l"]
+                self.dist_left = data["dist_l"]
+                self.K_right = data["K_r"]
+                self.dist_right = data["dist_r"]
+                self.R = data["R"]
+                self.T = data["T"]
+            self.P_left = self.K_left @ np.hstack([np.eye(3, dtype=np.float64), np.zeros((3, 1), dtype=np.float64)])
+            self.P_right = self.K_right @ np.hstack([self.R, self.T])
+            self._calibrated = True
+            return True
+        except Exception as e:
+            print(f"[STEREO] No se pudo cargar calibración desde {path}: {e}")
+            return False
 
     def calibrate_from_aruco(self, frame_left, frame_right):
         """Estima pose de ambas camaras con ArUco y genera matrices de proyeccion."""
@@ -95,8 +113,24 @@ class Stereo3DReconstructor:
         u_l, v_l = float(point_left[0]), float(point_left[1])
         u_r, v_r = float(point_right[0]), float(point_right[1])
 
-        pts_l = np.array([[u_l], [v_l]], dtype=np.float64)
-        pts_r = np.array([[u_r], [v_r]], dtype=np.float64)
+        if self.dist_left is not None and self.K_left is not None:
+            pts_l = cv2.undistortPoints(
+                np.array([[[u_l, v_l]]], dtype=np.float64),
+                self.K_left,
+                self.dist_left,
+                P=self.K_left
+            )
+            pts_r = cv2.undistortPoints(
+                np.array([[[u_r, v_r]]], dtype=np.float64),
+                self.K_right,
+                self.dist_right,
+                P=self.K_right
+            )
+            pts_l = np.array([[pts_l[0, 0, 0]], [pts_l[0, 0, 1]]], dtype=np.float64)
+            pts_r = np.array([[pts_r[0, 0, 0]], [pts_r[0, 0, 1]]], dtype=np.float64)
+        else:
+            pts_l = np.array([[u_l], [v_l]], dtype=np.float64)
+            pts_r = np.array([[u_r], [v_r]], dtype=np.float64)
 
         point_4d = cv2.triangulatePoints(self.P_left, self.P_right, pts_l, pts_r)
         w = point_4d[3, 0]
