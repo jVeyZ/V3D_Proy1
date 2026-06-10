@@ -388,7 +388,6 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
         aruco_detector = "legacy"
     
     calibrated = reconstructor.is_calibrated
-    calib_locked = reconstructor.is_calibrated
     if calibrated:
         print("[CAM] Iniciando — usando calibración estéreo cargada")
     else:
@@ -403,6 +402,7 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
     homography_right_inv = None
     aruco_every = 5
     aruco_tick = 0
+    pose_every = 30
     last_corners_l = None
     last_corners_r = None
     last_ids_l = None
@@ -455,37 +455,20 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
 
             frame_count += 1
             ordered_ids = reconstructor.marker_ids_order
-            if (not calib_locked) and frame_count % 30 == 0 and \
+            # Update pose from ArUco markers periodically (always in world coords)
+            if frame_count % pose_every == 0 and \
                 all(mid in cache_left  for mid in ordered_ids) and \
                 all(mid in cache_right for mid in ordered_ids):
                 img_pts_l = np.array([cache_left[m]  for m in ordered_ids], dtype=np.float64)
                 img_pts_r = np.array([cache_right[m] for m in ordered_ids], dtype=np.float64)
-                obj_pts   = reconstructor._world_object_points_3d()
-                h_l, w_l  = frame_l.shape[:2]
-                h_r, w_r  = frame_r.shape[:2]
-                K_l = reconstructor._estimate_camera_matrix(w_l, h_l, reconstructor.fov_deg)
-                K_r = reconstructor._estimate_camera_matrix(w_r, h_r, reconstructor.fov_deg)
 
-                ok_l, rvec_l, tvec_l = cv2.solvePnP(
-                    obj_pts, img_pts_l, K_l, reconstructor.dist_left,
-                    flags=cv2.SOLVEPNP_ITERATIVE)
-                ok_r, rvec_r, tvec_r = cv2.solvePnP(
-                    obj_pts, img_pts_r, K_r, reconstructor.dist_right,
-                    flags=cv2.SOLVEPNP_ITERATIVE)
-
-                print(f"[CAL] solvePnP ok_l={ok_l} ok_r={ok_r}")
-                if ok_l and ok_r:
-                    R_l, _ = cv2.Rodrigues(rvec_l)
-                    R_r, _ = cv2.Rodrigues(rvec_r)
-                    reconstructor.K_left  = K_l
-                    reconstructor.K_right = K_r
-                    reconstructor.P_left  = K_l @ np.hstack([R_l, tvec_l])
-                    reconstructor.P_right = K_r @ np.hstack([R_r, tvec_r])
-                    reconstructor._calibrated = True
+                ok = reconstructor.update_pose(img_pts_l, img_pts_r, frame_l.shape[:2])
+                if ok:
                     if not calibrated:
-                        print("[CAL] ✓ Stereo calibrado")
+                        print("[CAL] ✓ Stereo calibrado / pose actualizada")
                     calibrated = True
-                    calib_locked = True
+                else:
+                    print(f"[CAL] solvePnP falló en frame {frame_count}")
 
             if frame_count % homography_refresh_every == 0:
                 if all(mid in cache_left for mid in ordered_ids):

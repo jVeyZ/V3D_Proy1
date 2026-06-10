@@ -40,54 +40,47 @@ class Stereo3DReconstructor:
         self.tvec_left = None
         self.rvec_right = None
         self.tvec_right = None
-        self.R = None
-        self.T = None
         self._calibrated = False
 
     def load_calibration(self, path):
+        """Load calibrated intrinsics (K, dist) from NPZ file.
+
+        P matrices are NOT set here — they must be computed from the
+        current ArUco board pose via update_pose() so that triangulation
+        happens in world (board) coordinates.
+        """
         try:
             with np.load(path) as data:
                 self.K_left = data["K_l"]
                 self.dist_left = data["dist_l"]
                 self.K_right = data["K_r"]
                 self.dist_right = data["dist_r"]
-                self.R = data["R"]
-                self.T = data["T"]
-            self.P_left = self.K_left @ np.hstack([np.eye(3, dtype=np.float64), np.zeros((3, 1), dtype=np.float64)])
-            self.P_right = self.K_right @ np.hstack([self.R, self.T])
             self._calibrated = True
             return True
         except Exception as e:
             print(f"[STEREO] No se pudo cargar calibración desde {path}: {e}")
             return False
 
-    def calibrate_from_aruco(self, frame_left, frame_right):
-        """Estima pose de ambas camaras con ArUco y genera matrices de proyeccion."""
-        img_pts_left = self._detect_ordered_marker_centers(frame_left)
-        img_pts_right = self._detect_ordered_marker_centers(frame_right)
+    def update_pose(self, img_pts_left, img_pts_right, frame_shape):
+        """Compute P matrices in world (board) coordinates via solvePnP.
 
-        if img_pts_left is None or img_pts_right is None:
-            return False
-
+        Uses stored intrinsics (K, dist) — from NPZ if loaded, or
+        FOV-estimated otherwise.  Returns True on success.
+        """
         obj_pts = self._world_object_points_3d()
+        h, w = frame_shape
 
-        h_l, w_l = frame_left.shape[:2]
-        h_r, w_r = frame_right.shape[:2]
-        self.K_left = self._estimate_camera_matrix(w_l, h_l, self.fov_deg)
-        self.K_right = self._estimate_camera_matrix(w_r, h_r, self.fov_deg)
+        if self.K_left is None:
+            self.K_left = self._estimate_camera_matrix(w, h, self.fov_deg)
+        if self.K_right is None:
+            self.K_right = self._estimate_camera_matrix(w, h, self.fov_deg)
 
         ok_l, rvec_l, tvec_l = cv2.solvePnP(
-            obj_pts,
-            img_pts_left,
-            self.K_left,
-            self.dist_left,
+            obj_pts, img_pts_left, self.K_left, self.dist_left,
             flags=cv2.SOLVEPNP_ITERATIVE,
         )
         ok_r, rvec_r, tvec_r = cv2.solvePnP(
-            obj_pts,
-            img_pts_right,
-            self.K_right,
-            self.dist_right,
+            obj_pts, img_pts_right, self.K_right, self.dist_right,
             flags=cv2.SOLVEPNP_ITERATIVE,
         )
 
@@ -104,6 +97,14 @@ class Stereo3DReconstructor:
         self.rvec_right, self.tvec_right = rvec_r, tvec_r
         self._calibrated = True
         return True
+
+    def calibrate_from_aruco(self, frame_left, frame_right):
+        """Deprecated — use update_pose() instead."""
+        img_pts_left = self._detect_ordered_marker_centers(frame_left)
+        img_pts_right = self._detect_ordered_marker_centers(frame_right)
+        if img_pts_left is None or img_pts_right is None:
+            return False
+        return self.update_pose(img_pts_left, img_pts_right, frame_left.shape[:2])
 
     def triangulate(self, point_left, point_right):
         """Triangula un punto 3D en centimetros en el sistema mundo del tablero."""
