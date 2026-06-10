@@ -1,18 +1,20 @@
 """
-green_ball_tracker.py - Tracking de bola verde con deque + contornos.
-Basado en: https://pyimagesearch.com/2015/09/14/ball-tracking-with-opencv/
-Adaptado para stereo con Kalman smoothing.
+green_balloon_tracker.py - Tracking de globo verde con deque + contornos.
+Basado en el pipeline HSV + contornos de PyImageSearch y adaptado para
+estéreo con suavizado Kalman.
 """
 
 from collections import deque
-import numpy as np
+
 import cv2
+import numpy as np
+
 import src.game_config as config
 
 
-class GreenBallTracker:
+class GreenBalloonTracker:
     """
-    Tracker de bola verde usando el método de PyImageSearch:
+    Tracker de globo verde usando segmentación HSV:
     - Gaussian blur + HSV threshold
     - Erode/dilate para limpiar máscara
     - Contorno más grande → círculo mínimo + centroide
@@ -36,16 +38,12 @@ class GreenBallTracker:
     def _init_kalman(self, cx, cy):
         """Inicializa filtro Kalman para suavizar posición."""
         self._kalman = cv2.KalmanFilter(4, 2)
-        self._kalman.transitionMatrix = np.array([
-            [1, 0, 1, 0],
-            [0, 1, 0, 1],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ], dtype=np.float32)
-        self._kalman.measurementMatrix = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0]
-        ], dtype=np.float32)
+        self._kalman.transitionMatrix = np.array(
+            [[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32
+        )
+        self._kalman.measurementMatrix = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0]], dtype=np.float32
+        )
         self._kalman.processNoiseCov = np.eye(4, dtype=np.float32) * 0.03
         self._kalman.measurementNoiseCov = np.eye(2, dtype=np.float32) * 0.1
         self._kalman.errorCovPost = np.eye(4, dtype=np.float32) * 100
@@ -63,8 +61,8 @@ class GreenBallTracker:
 
     def detect(self, frame):
         """
-        Detección de bola verde usando el pipeline de PyImageSearch.
-        
+        Detección del globo verde usando HSV + contornos.
+
         Returns:
             (cx, cy, radius) o None
         """
@@ -72,14 +70,16 @@ class GreenBallTracker:
         blurred = cv2.GaussianBlur(frame, config.GAUSSIAN_BLUR_SIZE, 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
-        # Máscara verde
-        mask = cv2.inRange(hsv, config.BALL_GREEN_HSV_LOWER, config.BALL_GREEN_HSV_UPPER)
-        mask = cv2.erode(mask, None, iterations=config.ERODE_ITERATIONS)
-        mask = cv2.dilate(mask, None, iterations=config.DILATE_ITERATIONS)
+        # Máscara del globo verde
+        mask = cv2.inRange(
+            hsv, config.BALLOON_GREEN_HSV_LOWER, config.BALLOON_GREEN_HSV_UPPER
+        )
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        mask = cv2.erode(mask, kernel, iterations=config.ERODE_ITERATIONS)
+        mask = cv2.dilate(mask, kernel, iterations=config.DILATE_ITERATIONS)
 
         # Contornos
-        cnts = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL,
-                                cv2.CHAIN_APPROX_SIMPLE)
+        cnts = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cnts = cnts[0] if len(cnts) == 2 else cnts[1]
 
         if len(cnts) == 0:
@@ -89,7 +89,7 @@ class GreenBallTracker:
         c = max(cnts, key=cv2.contourArea)
         ((x, y), radius) = cv2.minEnclosingCircle(c)
 
-        if radius < config.MIN_RADIUS:
+        if radius < config.BALLOON_MIN_RADIUS_PX:
             return None
 
         # Centroide
@@ -105,7 +105,7 @@ class GreenBallTracker:
     def update(self, frame):
         """
         Actualiza tracking: detecta + suaviza con Kalman + actualiza trail.
-        
+
         Returns:
             (cx, cy, radius) suavizado o None si perdido
         """
@@ -119,7 +119,7 @@ class GreenBallTracker:
                 cx = int(pred[0, 0])
                 cy = int(pred[1, 0])
                 # Radio estimado del último válido
-                last_r = self.pts[-1][2] if self.pts else config.MIN_RADIUS
+                last_r = self.pts[-1][2] if self.pts else config.BALLOON_MIN_RADIUS_PX
                 self.pts.appendleft((cx, cy, last_r))
                 self._last_valid = np.array([cx, cy], dtype=np.float32)
                 return (cx, cy, last_r)
@@ -127,7 +127,7 @@ class GreenBallTracker:
                 pred = self._last_valid + self._last_velocity
                 cx = int(pred[0])
                 cy = int(pred[1])
-                last_r = self.pts[-1][2] if self.pts else config.MIN_RADIUS
+                last_r = self.pts[-1][2] if self.pts else config.BALLOON_MIN_RADIUS_PX
                 self.pts.appendleft((cx, cy, last_r))
                 self._last_valid = pred
                 return (cx, cy, last_r)
@@ -155,12 +155,13 @@ class GreenBallTracker:
             return (cx, cy, radius)
 
         # Predicción y verificación
+        assert self._kalman is not None
         pred = self._kalman.predict()
         pred_cx = float(pred[0, 0])
         pred_cy = float(pred[1, 0])
         if abs(cx - pred_cx) > 80 or abs(cy - pred_cy) > 80:
             self._lost_counter += 1
-            last_r = self.pts[-1][2] if self.pts else config.MIN_RADIUS
+            last_r = self.pts[-1][2] if self.pts else config.BALLOON_MIN_RADIUS_PX
             self.pts.appendleft((int(pred_cx), int(pred_cy), last_r))
             self._last_valid = np.array([pred_cx, pred_cy], dtype=np.float32)
             return (int(pred_cx), int(pred_cy), last_r)
@@ -184,14 +185,18 @@ class GreenBallTracker:
         return (smooth_cx, smooth_cy, radius)
 
     def draw_trail(self, frame):
-        """Dibuja el trail de la bola sobre el frame."""
+        """Dibuja el trail del globo sobre el frame."""
         for i in range(1, len(self.pts)):
             if self.pts[i - 1] is None or self.pts[i] is None:
                 continue
             thickness = int(np.sqrt(self.trail_size / float(i + 1)) * 2.5)
-            cv2.line(frame, (self.pts[i][0], self.pts[i][1]),
-                     (self.pts[i - 1][0], self.pts[i - 1][1]),
-                     (0, 0, 255), thickness)
+            cv2.line(
+                frame,
+                (self.pts[i][0], self.pts[i][1]),
+                (self.pts[i - 1][0], self.pts[i - 1][1]),
+                (0, 0, 255),
+                thickness,
+            )
 
     def draw_detection(self, frame, detection):
         """Dibuja círculo y centroide de la detección."""
@@ -213,14 +218,14 @@ class GreenBallTracker:
         self._last_velocity = np.array([0.0, 0.0], dtype=np.float32)
 
 
-class StereoGreenTracker:
+class StereoGreenBalloonTracker:
     """
-    Par de trackers para stereo: uno por cámara.
+    Par de trackers del globo para estéreo: uno por cámara.
     """
 
     def __init__(self):
-        self.left = GreenBallTracker()
-        self.right = GreenBallTracker()
+        self.left = GreenBalloonTracker()
+        self.right = GreenBalloonTracker()
 
     def detect_both(self, frame_left, frame_right):
         """Detecta en ambas cámaras (inicialización)."""
@@ -242,7 +247,6 @@ class StereoGreenTracker:
     def reset(self):
         self.left.reset()
         self.right.reset()
-
 
     @property
     def is_initialized(self):

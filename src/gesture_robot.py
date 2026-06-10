@@ -8,12 +8,13 @@ import time
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 try:
     import mediapipe as mp
+
     MEDIAPIPE_AVAILABLE = True
 except Exception:
+    mp = None
     MEDIAPIPE_AVAILABLE = False
 
 
@@ -28,11 +29,17 @@ COMMAND_MAP = {
 
 
 class GestureRobotController:
-    def __init__(self, camera_index=2, model_path="assets/gesture_recognizer.task",
-                 udp_host="10.196.11.199", udp_port=4210,
-                 min_score=0.40, publish_period=0.12):
-        self._last_pair = (None, None)          # ← NUEVO
-        self._last_publish_ts = 0.0  
+    def __init__(
+        self,
+        camera_index=2,
+        model_path="assets/gesture_recognizer.task",
+        udp_host="10.196.11.199",
+        udp_port=4210,
+        min_score=0.40,
+        publish_period=0.12,
+    ):
+        self._last_pair = (None, None)  # ← NUEVO
+        self._last_publish_ts = 0.0
         self.camera_index = camera_index
         self.model_path = str(model_path)
         self.udp_host = udp_host
@@ -59,7 +66,7 @@ class GestureRobotController:
         self._frame_lock = threading.Lock()
 
     def start(self):
-        if not self.enabled:
+        if not self.enabled or mp is None:
             print("[GestureRobot] MediaPipe no disponible.")
             return False
         self._running = True
@@ -102,8 +109,11 @@ class GestureRobotController:
 
     def _extract_commands(self, result):
         if result is None or not getattr(result, "gestures", None):
-            return {"command_left": None, "command_right": None,
-                    "timestamp_ms": int(time.time() * 1000)}
+            return {
+                "command_left": None,
+                "command_right": None,
+                "timestamp_ms": int(time.time() * 1000),
+            }
 
         best_by_hand = {}
         for i, hand_gestures in enumerate(result.gestures):
@@ -129,21 +139,31 @@ class GestureRobotController:
         }
 
     def _get_hand_label(self, result, hand_index):
-        if (result is None or not getattr(result, "handedness", None)
-                or hand_index >= len(result.handedness)
-                or not result.handedness[hand_index]):
+        if (
+            result is None
+            or not getattr(result, "handedness", None)
+            or hand_index >= len(result.handedness)
+            or not result.handedness[hand_index]
+        ):
             return None
         return str(result.handedness[hand_index][0].category_name).lower()
 
     def _publish(self, payload):
-        any_cmd = payload["command_left"] is not None or payload["command_right"] is not None
+        any_cmd = (
+            payload["command_left"] is not None or payload["command_right"] is not None
+        )
         pair = (payload["command_left"], payload["command_right"])
         changed = pair != self._last_pair
         now = time.monotonic()
         period_due = (now - self._last_publish_ts) >= self.publish_period
         if not any_cmd:
+            with self._lock:
+                self._last_payload = payload
+            self._last_pair = pair
             return
         if not (changed or period_due):
+            with self._lock:
+                self._last_payload = payload
             return
         if self.connected and self._udp_socket:
             data = json.dumps(payload).encode("utf-8")
@@ -158,12 +178,29 @@ class GestureRobotController:
 
     # Conexiones de la mano según el esquema de MediaPipe (21 landmarks)
     _HAND_CONNECTIONS = [
-        (0, 1), (1, 2), (2, 3), (3, 4),          # pulgar
-        (0, 5), (5, 6), (6, 7), (7, 8),            # índice
-        (0, 9), (9, 10), (10, 11), (11, 12),       # corazón
-        (0, 13), (13, 14), (14, 15), (15, 16),     # anular
-        (0, 17), (17, 18), (18, 19), (19, 20),     # meñique
-        (5, 9), (9, 13), (13, 17),                  # palma
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 4),  # pulgar
+        (0, 5),
+        (5, 6),
+        (6, 7),
+        (7, 8),  # índice
+        (0, 9),
+        (9, 10),
+        (10, 11),
+        (11, 12),  # corazón
+        (0, 13),
+        (13, 14),
+        (14, 15),
+        (15, 16),  # anular
+        (0, 17),
+        (17, 18),
+        (18, 19),
+        (19, 20),  # meñique
+        (5, 9),
+        (9, 13),
+        (13, 17),  # palma
     ]
 
     def _draw_overlay(self, frame_bgr, result):
@@ -171,11 +208,22 @@ class GestureRobotController:
         out = frame_bgr.copy()
         h, w, _ = out.shape
 
-        num_hands = len(result.hand_landmarks) if (result and getattr(result, "hand_landmarks", None)) else 0
+        num_hands = (
+            len(result.hand_landmarks)
+            if (result and getattr(result, "hand_landmarks", None))
+            else 0
+        )
 
         if num_hands == 0:
-            cv2.putText(out, "HANDS: 0", (15, 55),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+            cv2.putText(
+                out,
+                "HANDS: 0",
+                (15, 55),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 200, 255),
+                2,
+            )
         else:
             for i, landmarks in enumerate(result.hand_landmarks):
                 # Convertir coordenadas normalizadas a píxeles
@@ -197,29 +245,156 @@ class GestureRobotController:
                 if result.gestures and i < len(result.gestures) and result.gestures[i]:
                     gesture = result.gestures[i][0]
                     hand_label = self._get_hand_label(result, i) or "?"
-                    label = f"[{hand_label}] {gesture.category_name} {gesture.score:.0%}"
+                    label = (
+                        f"[{hand_label}] {gesture.category_name} {gesture.score:.0%}"
+                    )
                     tx = max(0, min(p[0] for p in pts))
                     ty = max(22, min(p[1] for p in pts) - 12)
                     # Fondo negro semitransparente para legibilidad
-                    (tw, tgh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.65, 2)
-                    cv2.rectangle(out, (tx - 2, ty - tgh - 4), (tx + tw + 2, ty + 4),
-                                  (0, 0, 0), -1)
-                    cv2.putText(out, label, (tx, ty),
-                                cv2.FONT_HERSHEY_DUPLEX, 0.65, (88, 230, 54), 2, cv2.LINE_AA)
+                    (tw, tgh), _ = cv2.getTextSize(
+                        label, cv2.FONT_HERSHEY_DUPLEX, 0.65, 2
+                    )
+                    cv2.rectangle(
+                        out,
+                        (tx - 2, ty - tgh - 4),
+                        (tx + tw + 2, ty + 4),
+                        (0, 0, 0),
+                        -1,
+                    )
+                    cv2.putText(
+                        out,
+                        label,
+                        (tx, ty),
+                        cv2.FONT_HERSHEY_DUPLEX,
+                        0.65,
+                        (88, 230, 54),
+                        2,
+                        cv2.LINE_AA,
+                    )
 
-            cv2.putText(out, f"HANDS: {num_hands}", (15, 55),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+            cv2.putText(
+                out,
+                f"HANDS: {num_hands}",
+                (15, 55),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 200, 255),
+                2,
+            )
 
         # Estado UDP
-        cv2.putText(out, f"UDP: {'ON' if self.connected else 'OFF'}", (15, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    (0, 255, 0) if self.connected else (0, 0, 255), 2)
+        cv2.putText(
+            out,
+            f"UDP: {'ON' if self.connected else 'OFF'}",
+            (15, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0) if self.connected else (0, 0, 255),
+            2,
+        )
 
         return out
 
+    @staticmethod
+    def _is_finger_up(landmarks, tip_idx, pip_idx):
+        return landmarks[tip_idx].y < landmarks[pip_idx].y
+
+    def _classify_simple_gesture(self, landmarks):
+        """Clasificador geométrico simple basado en landmarks de MediaPipe Hands.
+
+        Usa posiciones relativas 2D/normalizadas de los dedos. Es suficiente para
+        la interfaz HMI del juego cuando no existe un modelo .task externo.
+        """
+        index_up = self._is_finger_up(landmarks, 8, 6)
+        middle_up = self._is_finger_up(landmarks, 12, 10)
+        ring_up = self._is_finger_up(landmarks, 16, 14)
+        pinky_up = self._is_finger_up(landmarks, 20, 18)
+
+        up_count = sum([index_up, middle_up, ring_up, pinky_up])
+        if up_count == 0:
+            return "Closed_Fist"
+        if index_up and not middle_up and not ring_up and not pinky_up:
+            return "Pointing_Up"
+        if index_up and middle_up and not ring_up and not pinky_up:
+            return "Victory"
+        return None
+
+    def _run_simple_hands_fallback(self):
+        if mp is None or self._cap is None:
+            return
+        cap = self._cap
+        hands = mp.solutions.hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            model_complexity=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        drawer = mp.solutions.drawing_utils
+        connections = mp.solutions.hands.HAND_CONNECTIONS
+        print("[GestureRobot] Fallback MediaPipe Hands activo.")
+
+        while self._running:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.001)
+                continue
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = hands.process(rgb)
+            payload = {
+                "command_left": None,
+                "command_right": None,
+                "timestamp_ms": int(time.time() * 1000),
+            }
+
+            if result.multi_hand_landmarks:
+                handedness_list = result.multi_handedness or []
+                for i, hand_landmarks in enumerate(result.multi_hand_landmarks):
+                    drawer.draw_landmarks(frame, hand_landmarks, connections)
+                    if i >= len(handedness_list):
+                        continue
+                    hand = handedness_list[i].classification[0].label.lower()
+                    gesture = self._classify_simple_gesture(hand_landmarks.landmark)
+                    command = (
+                        COMMAND_MAP.get((hand, gesture))
+                        if gesture is not None
+                        else None
+                    )
+                    if hand == "left":
+                        payload["command_left"] = command
+                    elif hand == "right":
+                        payload["command_right"] = command
+                    if gesture is not None:
+                        cv2.putText(
+                            frame,
+                            f"{hand}: {gesture}",
+                            (15, 85 + i * 28),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.65,
+                            (80, 255, 80),
+                            2,
+                        )
+
+            self._publish(payload)
+            cv2.putText(
+                frame,
+                "GESTURE: MediaPipe Hands fallback",
+                (15, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (0, 220, 255),
+                2,
+            )
+            with self._frame_lock:
+                self._latest_frame = frame.copy()
+            time.sleep(0.01)
+
+        hands.close()
+
     def _run(self):
         self._init_udp()
-        if not self.enabled:
+        if not self.enabled or mp is None:
             return
 
         self._cap = cv2.VideoCapture(self.camera_index)
@@ -233,18 +408,10 @@ class GestureRobotController:
 
         model_path = Path(self.model_path)
         if not model_path.exists():
-            print(f"[GestureRobot] Modelo no encontrado: {model_path} – mostrando cámara sin gestos")
-            # Capturar en bruto para que get_frame() devuelva frames igualmente
-            while self._running:
-                ret, frame = self._cap.read()
-                if not ret:
-                    time.sleep(0.001)
-                    continue
-                cv2.putText(frame, "MODEL NOT FOUND", (10, 35),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                with self._frame_lock:
-                    self._latest_frame = frame.copy()
-                time.sleep(0.033)
+            print(
+                f"[GestureRobot] Modelo no encontrado: {model_path}; usando clasificador geométrico simple"
+            )
+            self._run_simple_hands_fallback()
             self._cap.release()
             return
 

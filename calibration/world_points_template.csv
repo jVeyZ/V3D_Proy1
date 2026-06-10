@@ -1,0 +1,6 @@
+world_x_cm,world_y_cm,world_z_cm,left_u,left_v,right_u,right_v
+0,0,0,LEFT_U_0,LEFT_V_0,RIGHT_U_0,RIGHT_V_0
+60,0,0,LEFT_U_1,LEFT_V_1,RIGHT_U_1,RIGHT_V_1
+60,40,0,LEFT_U_2,LEFT_V_2,RIGHT_U_2,RIGHT_V_2
+0,40,0,LEFT_U_3,LEFT_V_3,RIGHT_U_3,RIGHT_V_3
+30,20,20,LEFT_U_4,LEFT_V_4,RIGHT_U_4,RIGHT_V_4

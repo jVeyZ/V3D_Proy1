@@ -1,204 +1,197 @@
-# Guía de Uso del Proyecto
+# Guía de Uso - Proyecto 2: Balloon Catch 3D
 
 ## 1. Objetivo
-Esta guía explica cómo instalar, ejecutar y demostrar el proyecto de posicionamiento planar con mini-golf virtual, incluyendo un apartado de cumplimiento de los requerimientos 1.1 a 1.5.
 
-## 2. Requisitos Previos
-- Sistema operativo: macOS, Linux o Windows.
-- Python: 3.8 o superior.
-- Cámara:
-  - Opción A: webcam local.
-  - Opción B: stream IP (HTTP/RTSP).
-  - Opción C: modo demo sin cámara real.
+Aplicación interactiva de Visión 3D con dos cámaras:
 
-Dependencias Python (ver requirements.txt):
-- numpy
-- opencv-python
-- opencv-contrib-python
-- open3d
+- Se lanza un **globo verde real** dentro del volumen visible por las cámaras estéreo.
+- El sistema detecta el globo en ambas imágenes, resuelve la correspondencia izquierda/derecha y triangula su posición **XYZ** usando únicamente estereovisión en tiempo de ejecución.
+- La posición 3D del globo se mapea a un mundo virtual PyBullet.
+- En el mundo virtual hay un **robot/cesta digital** controlado mediante gestos de manos.
+- El juego consiste en colocar el robot debajo del globo virtual cuando el globo toque el suelo.
 
-## 3. Instalación
+> Nota: durante la ejecución no se usan ArUco/ChArUco ni marcadores en la escena. El archivo `calibration/stereo_charuco.npz` contiene una calibración estéreo previa de las cámaras; en runtime la posición del globo se obtiene por detección estéreo y triangulación.
+
+## 2. Instalación
+
 Desde la raíz del proyecto:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate   # En Windows: .venv\\Scripts\\activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 4. Ejecución Rápida
-### 4.1 Modo demo (recomendado para primera prueba)
+Dependencias principales:
+
+- `opencv-python` / `opencv-contrib-python`: captura, segmentación HSV, calibración y triangulación.
+- `numpy`: cálculo numérico.
+- `pybullet`: mundo virtual / gemelo digital.
+- `pynput`: control de teclado de respaldo.
+- `mediapipe`: detección de manos y gestos.
+
+## 3. Ejecución
 
 ```bash
-python pyScripts/main.py --demo --auto-calibrate --auto-detect
+python -m src.balloon_catch
 ```
 
-Qué hace este comando:
-- Usa cámara simulada.
-- Calibra automáticamente con las esquinas conocidas del entorno demo.
-- Realiza detección automática inicial de la pelota.
+La aplicación abre:
 
-### 4.2 Modo cámara real (webcam)
+- ventana PyBullet con el mundo virtual;
+- ventana `Stereo Left`;
+- ventana `Stereo Right`;
+- ventana `Gesture Robot`.
 
-```bash
-python pyScripts/main.py --camera 0 --auto-calibrate --auto-detect
-```
+## 4. Flujo de demostración recomendado
 
-### 4.3 Modo cámara real (stream IP)
+1. Colocar dos cámaras con solape visual suficiente.
+2. Verificar que existe `calibration/stereo_charuco.npz`.
+3. Ejecutar:
 
-```bash
-python pyScripts/main.py --camera "http://IP:PUERTO/stream" --auto-calibrate --auto-detect
-```
+   ```bash
+   python -m src.balloon_catch
+   ```
 
-### 4.4 Ejecutar sin Open3D (solo AR + gemelo 2D)
+4. Antes de la demo, generar una calibración estéreo con `scripts/calibrate_charuco_stereo.py` y revisar `calibration/report/STEREO_CALIBRATION_REPORT.md`.
+5. Calibrar el sistema de mundo con `scripts/calibrate_world_from_points.py` para crear `calibration/world_transform.npz`.
+6. Pulsar `P` y seleccionar una ROI sobre el globo verde en `Stereo Left` si el HSV no segmenta bien.
+7. Poner el globo cerca del suelo y pulsar `G` para fijar la referencia de suelo si la altura inicial no es estable.
+8. Lanzar/dejar caer el globo verde.
+9. Controlar el robot virtual con gestos para colocarlo bajo el globo antes de que toque el suelo.
+10. Observar el resultado en consola:
+   - `[CATCH] ¡Atrapado!`
+   - `[CATCH] Fallo`
 
-```bash
-python pyScripts/main.py --demo --auto-calibrate --auto-detect --no-3d
-```
+## 5. Controles
 
-### 4.5 Ver todas las opciones
+### Robot virtual
 
-```bash
-python pyScripts/main.py --help
-```
+Gestos soportados por mano izquierda/derecha:
 
-### 4.6 Tabla de flags y usos
+| Gesto | Comando |
+| --- | --- |
+| Índice levantado (`Pointing_Up`) | rueda correspondiente hacia delante |
+| Victoria (`Victory`) | rueda correspondiente hacia atrás |
+| Puño (`Closed_Fist`) | parar rueda correspondiente |
 
-| Flag | Tipo | Valor por defecto | Uso | Ejemplo |
-| --- | --- | --- | --- | --- |
-| `--demo` | booleano (`store_true`) | `False` | Usa cámara simulada para pruebas sin webcam real. | `python pyScripts/main.py --demo` |
-| `--auto-calibrate` | booleano (`store_true`) | `False` | Activa calibración automática: en demo usa esquinas conocidas y en cámara real intenta ArUco. | `python pyScripts/main.py --demo --auto-calibrate` |
-| `--auto-detect` | booleano (`store_true`) | `False` | Activa detección automática inicial de la pelota (en lugar de clic manual). | `python pyScripts/main.py --auto-detect` |
-| `--no-3d` | booleano (`store_true`) | `False` | Desactiva Open3D y deja solo el gemelo digital 2D + visor AR. | `python pyScripts/main.py --demo --no-3d` |
-| `--camera` | texto (`str`) | `config.CAMERA_SOURCE` | Selecciona origen de vídeo: índice de webcam (`0`, `1`, ...) o URL de stream (`http/rtsp`). | `python pyScripts/main.py --camera 0` |
-| `--tracker` | enum (`color`, `csrt`, `kcf`, `mosse`) | `config.TRACKING_METHOD` | Elige el método de seguimiento para los frames posteriores a la detección inicial. | `python pyScripts/main.py --tracker csrt` |
-| `--correct-height` | booleano (`store_true`) | `False` | Aplica corrección por altura en el posicionamiento cuando el centro no está en el plano. | `python pyScripts/main.py --correct-height` |
+Controles de teclado de respaldo:
 
-Combinaciones recomendadas:
-- Demo estable para presentación: `python pyScripts/main.py --demo --auto-calibrate --auto-detect`
-- Cámara real con robustez de tracking: `python pyScripts/main.py --camera 0 --auto-calibrate --auto-detect --tracker csrt`
-- Equipos sin soporte Open3D: `python pyScripts/main.py --demo --auto-calibrate --auto-detect --no-3d`
+| Tecla | Acción |
+| --- | --- |
+| `W` | Avanzar |
+| `S` | Retroceder |
+| `A` | Girar izquierda |
+| `D` | Girar derecha |
+| `R` | Reset del robot |
+| `C` | Cambiar cámara virtual |
+| `G` | Calibrar altura de suelo con la medida estéreo actual |
+| `P` | Recalibrar rango HSV del globo con ROI |
+| `Q` | Salir |
 
-## 5. Flujo de Uso Recomendado
-1. Iniciar en modo demo para validar instalación y ventanas.
-2. Verificar que aparecen:
-   - Ventana AR principal.
-   - Ventana Gemelo Digital 2D.
-   - Ventana Open3D (si no se usa --no-3d).
-3. Comprobar detección inicial de la pelota.
-4. Mover la pelota (demo o escena real) y validar seguimiento.
-5. Confirmar que la posición se refleja en:
-   - Gemelo digital.
-   - Superposición AR.
-6. Activar corrección de altura si procede:
+## 6. Módulos principales
 
-```bash
-python pyScripts/main.py --demo --auto-calibrate --auto-detect --correct-height
-```
+- `src/balloon_catch.py`: aplicación integrada, hilos, mundo PyBullet, lógica del juego y mapeo estéreo→mundo virtual.
+- `src/balloon_tracker.py`: detección del globo verde en ambas cámaras y tracking con Kalman.
+- `src/stereo.py`: carga de calibración estéreo y triangulación 3D.
+- `src/gesture_robot.py`: detección/clasificación de gestos con MediaPipe y generación de comandos.
+- `scripts/make_charuco_board.py`: generación de tablero de calibración offline.
+- `scripts/capture_charuco_stereo.py`: captura de pares de calibración offline.
+- `scripts/calibrate_charuco_stereo.py`: calibración estéreo offline.
 
-## 6. Controles Durante la Ejecución
-- q o ESC: salir.
-- c: recalibrar.
-- d: cambiar modo de detección (manual/automático).
-- f: forzar re-detección.
-- m: forzar detección manual inmediata.
-- n: nueva partida.
-- r: reiniciar nivel.
-- v: activar/desactivar escena 3D.
-- h: mostrar/ocultar panel de ayuda.
-- e: mostrar explicación de corrección de altura.
+## 7. Cumplimiento de requisitos del Proyecto 2
 
-Solo en modo demo:
-- WASD o flechas: mover pelota.
-- t: alternar movimiento automático/manual.
-- Click y arrastre: mover pelota con ratón.
+### 2.1 Escena virtual compleja / gemelo digital
 
-## 7. Estructura Funcional (Resumen)
-- pyScripts/main.py: integración completa de la aplicación.
-- pyScripts/calibration.py: homografía manual y automática (ArUco).
-- pyScripts/detection.py: detección manual y automática.
-- pyScripts/tracking.py: seguimiento por color o trackers OpenCV.
-- pyScripts/positioning.py: posicionamiento planar y corrección de altura.
-- pyScripts/virtual_scene.py: gemelo digital (Open3D + fallback 2D).
-- pyScripts/ar_viewer.py: overlay AR de elementos virtuales.
-- pyScripts/game_engine.py: lógica del juego de mini-golf.
-- pyScripts/demo_camera.py: cámara simulada para pruebas.
+**Estado: cumplido con PyBullet.**
 
-## 8. Cumplimiento de Requerimientos
-### 1.1 Escena virtual tipo gemelo digital (2 puntos)
-Estado: Cumplido.
-- Se implementa visor Open3D interactivo y vista 2D alternativa.
-- Se representa al menos un objeto real (pelota) y objetos virtuales (hoyo, bandera, obstáculos).
-- El estado de la pelota se actualiza continuamente en el gemelo digital.
+- La escena virtual contiene un campo 3D, límites, porterías decorativas, un globo virtual y un robot/cesta digital.
+- El globo virtual representa el objeto real detectado por las cámaras.
+- El robot digital es el agente controlado por el usuario.
 
-Módulos implicados:
-- pyScripts/virtual_scene.py
-- pyScripts/main.py
+Archivos:
 
-### 1.2 Detección y seguimiento de objeto real en movimiento (2 puntos)
-Estado: Cumplido.
-- Detección manual disponible (clic sobre la imagen).
-- Detección automática disponible (HSV + contornos + fallback Hough).
-- Seguimiento en frames sucesivos con tracker por color o trackers OpenCV.
-- La app prioriza detección inicial y seguimiento posterior; además incluye re-detección de recuperación cuando el tracker se pierde para mayor robustez.
+- `src/balloon_catch.py`
 
-Módulos implicados:
-- pyScripts/detection.py
-- pyScripts/tracking.py
-- pyScripts/main.py
+### 2.2 Detección, seguimiento y correspondencia estéreo
 
-### 1.3 Posicionamiento planar con una cámara + actualización en visor virtual y AR (2 puntos)
-Estado: Cumplido.
-- Posicionamiento con homografía imagen-plano.
-- Calibración manual y automática con ArUco.
-- Actualización continua de posición estimada en gemelo digital.
-- Proyección de elementos virtuales en el visor de realidad aumentada.
+**Estado: cumplido para un objeto real principal: el globo verde.**
 
-Módulos implicados:
-- pyScripts/calibration.py
-- pyScripts/positioning.py
-- pyScripts/virtual_scene.py
-- pyScripts/ar_viewer.py
-- pyScripts/main.py
+- Se detecta el globo por segmentación HSV y contornos en la cámara izquierda y derecha.
+- Cada cámara mantiene tracking suavizado con Kalman.
+- La correspondencia izquierda/derecha se resuelve directamente porque el objeto de interés es único y está segmentado en ambas vistas.
+- El usuario puede recalibrar el color con una ROI (`P`) sin usar marcadores.
 
-### 1.4 Corrección por altura cuando el centro no está sobre el plano (2 puntos)
-Estado: Cumplido.
-- Se implementa corrección geométrica de altura usando el centro de cámara estimado.
-- Existe explicación teórica integrada para justificar el método.
-- Se puede activar en ejecución con --correct-height.
+Archivos:
 
-Módulos implicados:
-- pyScripts/positioning.py
-- pyScripts/main.py
+- `src/balloon_tracker.py`
+- `src/balloon_catch.py`
 
-### 1.5 Aplicación integrada de posicionamiento planar (2 puntos)
-Estado: Cumplido.
-- Integración completa en una aplicación interactiva (mini-golf).
-- Se integran detección, seguimiento, posicionamiento, AR y escena virtual.
-- Incluye gestión de estado de juego, niveles, golpes y colisiones.
+### 2.3 Posicionamiento 3D y actualización continua
 
-Módulos implicados:
-- pyScripts/main.py
-- pyScripts/game_engine.py
+**Estado: cumplido si existen una calibración estéreo válida y `calibration/world_transform.npz`.**
 
-## 9. Checklist de Demostración
-Usa esta lista para la presentación:
-1. Lanzar en demo y mostrar calibración automática.
-2. Mostrar detección inicial (manual o automática).
-3. Mostrar seguimiento de la pelota en movimiento.
-4. Mostrar actualización simultánea en AR y gemelo digital.
-5. Activar --correct-height y explicar cuándo aplica.
-6. Completar un hoyo para demostrar la integración del juego.
+- `src/stereo.py` usa las matrices de calibración `K_l`, `K_r`, `R`, `T`, `F` y `cv2.triangulatePoints`.
+- La correspondencia izquierda/derecha se valida con error epipolar antes de triangular.
+- `calibration/world_transform.npz` transforma las coordenadas de cámara izquierda al sistema 3D de mundo del juego.
+- La posición 3D triangulada en mundo se actualiza continuamente en PyBullet.
+- El globo virtual sube/baja usando la componente `Z` y se compara con una referencia de suelo.
+- No se usan ArUco/ChArUco durante la ejecución; solo durante la calibración offline.
 
-## 10. Solución de Problemas Frecuentes
-- No abre cámara real:
-  - Verificar índice o URL de --camera.
-  - Probar modo demo.
-- Open3D falla:
-  - Ejecutar con --no-3d y mantener gemelo 2D.
-- Detección inestable:
-  - Ajustar rangos HSV en pyScripts/config.py.
-  - Mejorar iluminación y contraste de la pelota.
-- Calibración ArUco no converge:
-  - Confirmar 4 marcadores visibles y con IDs correctos.
-  - Usar calibración manual como alternativa.
+Archivos:
+
+- `src/stereo.py`
+- `calibration/stereo_charuco.npz`
+- `calibration/world_transform.npz`
+- `src/balloon_catch.py`
+
+Evidencias para la memoria:
+
+- `calibration/report/STEREO_CALIBRATION_REPORT.md`
+- `calibration/report/images/*detected*.png`
+- `calibration/WORLD_TRANSFORM_REPORT.md`
+- RMS estéreo, baseline y RMS de transformación mundo.
+
+### 2.4 Interfaz humano-máquina basada en visión
+
+**Estado: cumplido.**
+
+- `src/gesture_robot.py` usa MediaPipe para detectar manos.
+- Si existe `assets/gesture_recognizer.task`, usa el recognizer de MediaPipe Tasks.
+- Si no existe, usa un fallback con `mediapipe.solutions.hands` y un clasificador geométrico propio basado en landmarks.
+- Se clasifican gestos finitos y se convierten en comandos de rueda izquierda/derecha.
+- Los comandos controlan directamente el robot virtual del mundo PyBullet.
+
+Archivos:
+
+- `src/gesture_robot.py`
+- `src/balloon_catch.py`
+
+### 2.5 Aplicación 3D integrada con procesamiento paralelo
+
+**Estado: cumplido.**
+
+La aplicación integra:
+
+- hilo estéreo para cámaras, detección, tracking y triangulación;
+- hilo de gestos para la interfaz humano-máquina;
+- hilo principal para PyBullet, ventanas OpenCV, lógica del juego y scoring.
+
+El juego completo consiste en coordinar un objeto real 3D medido por estereovisión con un robot virtual controlado por gestos.
+
+## 8. Limitaciones conocidas
+
+- La precisión 3D depende mucho de la calibración estéreo y del ajuste cámara→mundo. Si el globo virtual salta o la altura no es estable, repetir calibración.
+- El sistema actual está optimizado para un único globo verde. Si hay varios objetos verdes, la correspondencia puede confundirse.
+- El mapeo al mundo virtual depende de los puntos de `calibration/world_points.csv`; si esos puntos se marcan mal, el mundo queda sesgado.
+- La realidad aumentada proyecta la huella del robot sobre la cámara izquierda cuando existe `world_transform.npz`.
+
+## 9. Checklist para presentación
+
+- [ ] Mostrar cámaras izquierda/derecha detectando el globo.
+- [ ] Mostrar valores XYZ triangulados en consola/overlay.
+- [ ] Mostrar el globo virtual moviéndose en PyBullet.
+- [ ] Mostrar gestos controlando el robot.
+- [ ] Lanzar el globo y conseguir al menos un `[CATCH] ¡Atrapado!`.
+- [ ] Explicar que runtime no usa marcadores; la calibración estéreo es previa.
+- [ ] Reportar RMS de calibración y limitaciones.
