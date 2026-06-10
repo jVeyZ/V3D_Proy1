@@ -390,8 +390,13 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
     calibrated = reconstructor.is_calibrated
     if calibrated:
         print("[CAM] Iniciando — usando calibración estéreo cargada")
+        print(f"[CAM]   K_left=\n{reconstructor.K_left}")
+        print(f"[CAM]   K_right=\n{reconstructor.K_right}")
+        print(f"[CAM]   Nota: la pose (P matrices) se estimará desde ArUco cada {pose_every} frames")
     else:
         print("[CAM] Iniciando — calibración continua por ArUco")
+    print("[CAM] Para calibrar color de la bola: pulsa 'P' y selecciona un rectángulo sobre ella")
+    print(f"[CAM] HSV bola verde actual: {config.BALL_GREEN_HSV_LOWER.tolist()} → {config.BALL_GREEN_HSV_UPPER.tolist()}")
     cache_left = {}
     cache_right = {}
     frame_count = 0
@@ -508,6 +513,11 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                 tracker.reset()
                 _hsv_updated = False
         det_l, det_r = tracker.update(frame_l, frame_r)
+        if frame_count % 30 == 0:
+            print(f"[DET] L={'✓' if det_l is not None else '✗'}  "
+                  f"R={'✓' if det_r is not None else '✗'}  "
+                  f"H={'✓' if homography_left is not None else '✗'}  "
+                  f"3D={'✓' if (calibrated and reconstructor.P_left is not None) else '✗'}")
         pos_3d = None
         mode_label = None
         xy_world = None
@@ -562,6 +572,9 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                 global _ball_latest, _ball_latest_ts
                 _ball_latest = pos_3d
                 _ball_latest_ts = time.time()
+            if frame_count % 15 == 0:
+                print(f"[POS] {mode_label or '?'}: "
+                      f"X={pos_3d[0]:6.1f}  Y={pos_3d[1]:6.1f}  Z={pos_3d[2]:6.1f}  cm")
             try:
                 ball_q.put_nowait(pos_3d)
             except queue.Full:
@@ -575,7 +588,9 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                     pass
         
         # Info en frames
-        status = "OK" if calibrated else "NO CAL"
+        cal_status = "3D" if (calibrated and reconstructor.P_left is not None) else \
+                     "2D" if (homography_left is not None) else "NO-CAL"
+        has_homog = (homography_left is not None)
         for frame, det, name, tracker_side in [
             (frame_l, det_l, "L", tracker.left),
             (frame_r, det_r, "R", tracker.right)
@@ -586,12 +601,14 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                 cv2.putText(frame, "BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
             else:
                 cv2.putText(frame, "NO BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+            cv2.putText(frame, f"[{cal_status}] {name}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,200,255), 1)
+            if has_homog:
+                cv2.putText(frame, "HOMOG", (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
             if mode_label is not None:
-                cv2.putText(frame, mode_label, (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 0), 2)
-            cv2.putText(frame, f"[{status}] {name}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,200,255), 1)
+                cv2.putText(frame, mode_label, (70, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,0), 1)
             if pos_3d is not None:
-                cv2.putText(frame, f"Z={pos_3d[2]:.1f}cm", (10, 100),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,0), 2)
+                cv2.putText(frame, f"X={pos_3d[0]:.1f} Y={pos_3d[1]:.1f} Z={pos_3d[2]:.1f}",
+                            (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,0), 2)
 
         # ── AR Car Overlay (2D directo con homografía) ──
         with _car_lock:
