@@ -11,10 +11,10 @@ import time
 import os
 import threading
 import queue
-import game_config as config
+import src.game_config as config
 
 # Garantiza que las rutas relativas (assets/) funcionen
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ─── Queues para comunicación entre hilos ───
 ball_queue = queue.Queue(maxsize=5)
@@ -353,8 +353,8 @@ def _load_obj_wireframe(path):
 # HILO ESTÉREO
 # ─────────────────────────────────────────────
 def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
-    from ball_tracker import StereoGreenTracker
-    from stereo import Stereo3DReconstructor
+    from src.ball_tracker import StereoGreenTracker
+    from src.stereo import Stereo3DReconstructor
     
     print(f"[CAM] Abriendo cámaras: izq={left_src}, der={right_src}")
     cap_l = cv2.VideoCapture(left_src)
@@ -677,7 +677,7 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
 def gesture_worker(frame_q):
     gesture_available = False
     try:
-        from gesture_robot import GestureRobotController
+        from src.gesture_robot import GestureRobotController
         gesture_available = True
     except Exception as e:
         print(f"[GESTURE] gesture_robot no disponible: {e}")

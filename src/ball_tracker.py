@@ -7,7 +7,7 @@ Adaptado para stereo con Kalman smoothing.
 from collections import deque
 import numpy as np
 import cv2
-import game_config as  config
+import src.game_config as config
 
 
 class GreenBallTracker:

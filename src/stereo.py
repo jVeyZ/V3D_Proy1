@@ -2,7 +2,7 @@
 
 import cv2
 import numpy as np
-import game_config as config 
+import src.game_config as config 
 
 
 class Stereo3DReconstructor:

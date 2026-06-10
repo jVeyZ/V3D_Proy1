@@ -4,7 +4,7 @@ calibration.py - Calibración de la cámara mediante homografía.
 
 import cv2
 import numpy as np
-import game_config as config  # ← CAMBIO: alias para no tocar todo el código
+import src.game_config as config  # ← CAMBIO: alias para no tocar todo el código
 
 
 class HomographyCalibrator:
