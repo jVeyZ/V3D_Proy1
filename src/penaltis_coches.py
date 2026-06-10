@@ -1,5 +1,5 @@
 """
-Soccer AR Game - PyBullet + Stereo + Gesture (macOS FIX)
+Soccer AR Game - PyBullet + Stereo Vision
 Coche cuadrado con ruedas como links fijos (nunca se desincronizan)
 """
 
@@ -13,18 +13,12 @@ import threading
 import queue
 import src.game_config as config
 
-# Garantiza que las rutas relativas (assets/) funcionen
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ─── Queues para comunicación entre hilos ───
 ball_queue = queue.Queue(maxsize=5)
 stereo_left_queue = queue.Queue(maxsize=2)
 stereo_right_queue = queue.Queue(maxsize=2)
 gesture_queue = queue.Queue(maxsize=2)
-
-# ─── Estado ArUco compartido ───
-_aruco_lock = threading.Lock()
-_aruco_ids = {"left": set(), "right": set()}
 
 _hsv_lock = threading.Lock()
 _hsv_updated = False
@@ -285,71 +279,6 @@ class CarController:
 
 
 # ─────────────────────────────────────────────
-# DIBUJAR ARUCOS
-# ─────────────────────────────────────────────
-def draw_aruco_debug(frame, corners, ids):
-    if ids is None or len(ids) == 0:
-        return frame
-    for (marker_corner, marker_id) in zip(corners, ids.flatten()):
-        pts = marker_corner.reshape((4, 2)).astype(int)
-        for i in range(4):
-            cv2.line(frame, tuple(pts[i]), tuple(pts[(i+1)%4]), (0, 255, 0), 2)
-        cX = int((pts[0][0] + pts[2][0]) / 2.0)
-        cY = int((pts[0][1] + pts[2][1]) / 2.0)
-        cv2.circle(frame, (cX, cY), 4, (0, 0, 255), -1)
-        cv2.putText(frame, str(marker_id), (pts[0][0], pts[0][1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    return frame
-
-
-def _detect_markers(detector, gray, aruco_dict, aruco_params):
-    if detector == "legacy" or detector is None:
-        return cv2.aruco.detectMarkers(gray, aruco_dict, parameters=aruco_params)
-    return detector.detectMarkers(gray)
-
-
-def _load_obj_wireframe(path):
-    if not os.path.exists(path):
-        return None, None
-    verts = []
-    edges = set()
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            if line.startswith("v "):
-                parts = line.strip().split()
-                if len(parts) >= 4:
-                    try:
-                        verts.append([float(parts[1]), float(parts[2])])
-                    except ValueError:
-                        pass
-            elif line.startswith("f "):
-                parts = line.strip().split()[1:]
-                idxs = []
-                for p in parts:
-                    try:
-                        idx = int(p.split("/")[0]) - 1
-                        idxs.append(idx)
-                    except ValueError:
-                        pass
-                for i in range(len(idxs)):
-                    a = idxs[i]
-                    b = idxs[(i + 1) % len(idxs)]
-                    if a != b:
-                        edges.add((min(a, b), max(a, b)))
-    if len(verts) < 3 or len(edges) == 0:
-        return None, None
-    v = np.array(verts, dtype=np.float64)
-    min_xy = v.min(axis=0)
-    max_xy = v.max(axis=0)
-    size = max(max_xy - min_xy)
-    if size <= 1e-9:
-        return None, None
-    center = (min_xy + max_xy) * 0.5
-    v = (v - center) / size
-    return v, list(edges)
-
-
-# ─────────────────────────────────────────────
 # HILO ESTÉREO
 # ─────────────────────────────────────────────
 def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
@@ -380,41 +309,17 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
         else:
             print(f"[CAL] No se pudo cargar calibración desde {calib_path}")
     
-    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-    aruco_params = cv2.aruco.DetectorParameters()
-    try:
-        aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
-    except AttributeError:
-        aruco_detector = "legacy"
-    
     calibrated = reconstructor.is_calibrated
     if calibrated:
-        print("[CAM] Iniciando — usando calibración estéreo cargada")
+        print("[CAM] Iniciando — calibración estéreo cargada (sin ArUco)")
         print(f"[CAM]   K_left=\n{reconstructor.K_left}")
         print(f"[CAM]   K_right=\n{reconstructor.K_right}")
-        print(f"[CAM]   Nota: la pose (P matrices) se estimará desde ArUco cada {pose_every} frames")
     else:
-        print("[CAM] Iniciando — calibración continua por ArUco")
+        print("[CAM] Iniciando — SIN calibración estéreo")
     print("[CAM] Para calibrar color de la bola: pulsa 'P' y selecciona un rectángulo sobre ella")
     print(f"[CAM] HSV bola verde actual: {config.BALL_GREEN_HSV_LOWER.tolist()} → {config.BALL_GREEN_HSV_UPPER.tolist()}")
-    cache_left = {}
-    cache_right = {}
-    frame_count = 0
-    homography_left = None
-    homography_refresh_every = 15
-    homography_left_inv = None
-    homography_right = None
-    homography_right_inv = None
-    aruco_every = 5
-    aruco_tick = 0
-    pose_every = 30
-    last_corners_l = None
-    last_corners_r = None
-    last_ids_l = None
-    last_ids_r = None
     
-    last_xy_world = None
-    last_z_world = None
+    frame_count = 0
 
     while True:
         ret_l, frame_l = cap_l.read()
@@ -423,149 +328,29 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
             time.sleep(0.001)
             continue
         
-        if aruco_detector is not None:
-            aruco_tick += 1
-            do_aruco = (aruco_tick % aruco_every == 0)
-            if do_aruco:
-                gray_l = cv2.cvtColor(frame_l, cv2.COLOR_BGR2GRAY)
-                gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
-                corners_l, ids_l, _ = _detect_markers(aruco_detector, gray_l, aruco_dict, aruco_params)
-                corners_r, ids_r, _ = _detect_markers(aruco_detector, gray_r, aruco_dict, aruco_params)
-                last_corners_l, last_ids_l = corners_l, ids_l
-                last_corners_r, last_ids_r = corners_r, ids_r
-            else:
-                corners_l, ids_l = last_corners_l, last_ids_l
-                corners_r, ids_r = last_corners_r, last_ids_r
-
-            frame_l = draw_aruco_debug(frame_l, corners_l, ids_l)
-            frame_r = draw_aruco_debug(frame_r, corners_r, ids_r)
-            n_l = len(ids_l) if ids_l is not None else 0
-            n_r = len(ids_r) if ids_r is not None else 0
-            for frame, n, name in [(frame_l, n_l, "L"), (frame_r, n_r, "R")]:
-                color = (0, 255, 0) if n >= 4 else (0, 165, 255) if n > 0 else (0, 0, 255)
-                label = f"ArUco {name}: {n}/4"
-                fh = frame.shape[0]
-                cv2.putText(frame, label, (10, fh - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
-            with _aruco_lock:
-                _aruco_ids["left"]  = set(ids_l.flatten().tolist()) if ids_l is not None else set()
-                _aruco_ids["right"] = set(ids_r.flatten().tolist()) if ids_r is not None else set()
-
-            if do_aruco and ids_l is not None:
-                for i, mid in enumerate(ids_l.flatten()):
-                    cache_left[int(mid)] = corners_l[i][0].mean(axis=0)
-            if do_aruco and ids_r is not None:
-                for i, mid in enumerate(ids_r.flatten()):
-                    cache_right[int(mid)] = corners_r[i][0].mean(axis=0)
-
-            frame_count += 1
-            ordered_ids = reconstructor.marker_ids_order
-            # Update pose from ArUco markers periodically (always in world coords)
-            if frame_count % pose_every == 0 and \
-                all(mid in cache_left  for mid in ordered_ids) and \
-                all(mid in cache_right for mid in ordered_ids):
-                img_pts_l = np.array([cache_left[m]  for m in ordered_ids], dtype=np.float64)
-                img_pts_r = np.array([cache_right[m] for m in ordered_ids], dtype=np.float64)
-
-                ok = reconstructor.update_pose(img_pts_l, img_pts_r, frame_l.shape[:2])
-                if ok:
-                    if not calibrated:
-                        print("[CAL] ✓ Stereo calibrado / pose actualizada")
-                    calibrated = True
-                else:
-                    print(f"[CAL] solvePnP falló en frame {frame_count}")
-
-            if frame_count % homography_refresh_every == 0:
-                if all(mid in cache_left for mid in ordered_ids):
-                    img_pts_l = np.array([cache_left[m] for m in ordered_ids], dtype=np.float64)
-                    H_cache, _ = cv2.findHomography(img_pts_l, config.WORLD_CORNERS, cv2.RANSAC, 5.0)
-                    if H_cache is not None:
-                        homography_left = H_cache
-                        try:
-                            homography_left_inv = np.linalg.inv(H_cache)
-                        except np.linalg.LinAlgError:
-                            homography_left_inv = None
-                if all(mid in cache_right for mid in ordered_ids):
-                    img_pts_r = np.array([cache_right[m] for m in ordered_ids], dtype=np.float64)
-                    H_cache, _ = cv2.findHomography(img_pts_r, config.WORLD_CORNERS, cv2.RANSAC, 5.0)
-                    if H_cache is not None:
-                        homography_right = H_cache
-                        try:
-                            homography_right_inv = np.linalg.inv(H_cache)
-                        except np.linalg.LinAlgError:
-                            homography_right_inv = None
-
-            if homography_left is not None and homography_left_inv is None:
-                try:
-                    homography_left_inv = np.linalg.inv(homography_left)
-                except np.linalg.LinAlgError:
-                    homography_left_inv = None
-            if homography_right is not None and homography_right_inv is None:
-                try:
-                    homography_right_inv = np.linalg.inv(homography_right)
-                except np.linalg.LinAlgError:
-                    homography_right_inv = None
-        
-        # Tracking
+        # Tracking de bola verde
         with _hsv_lock:
             global _hsv_updated
             if _hsv_updated:
                 tracker.reset()
                 _hsv_updated = False
         det_l, det_r = tracker.update(frame_l, frame_r)
+        
         if frame_count % 30 == 0:
             print(f"[DET] L={'✓' if det_l is not None else '✗'}  "
                   f"R={'✓' if det_r is not None else '✗'}  "
-                  f"H={'✓' if homography_left is not None else '✗'}  "
-                  f"3D={'✓' if (calibrated and reconstructor.P_left is not None) else '✗'}")
+                  f"{'3D' if calibrated else 'NO-CAL'}")
+        
+        # Triangulación estéreo pura
         pos_3d = None
         mode_label = None
-        xy_world = None
-
-        # Homografía: usar cache si existe
-
-        # Fallback XY con homografía cacheada (NO requiere ArUcos visibles)
-        if det_l is not None and homography_left is not None:
-            pt = np.array([det_l[0], det_l[1], 1.0], dtype=np.float64)
-            w = homography_left @ pt
-            if abs(w[2]) > 1e-10:
-                xy_world = np.array([w[0] / w[2], w[1] / w[2]], dtype=np.float64)
-
-        if xy_world is None and det_r is not None and homography_right is not None:
-            pt = np.array([det_r[0], det_r[1], 1.0], dtype=np.float64)
-            w = homography_right @ pt
-            if abs(w[2]) > 1e-10:
-                xy_world = np.array([w[0] / w[2], w[1] / w[2]], dtype=np.float64)
-
-        if xy_world is not None:
-            last_xy_world = xy_world
-
-        # ── Cálculo de pos_3d: XY de homografía + Z de triangulación ──
         tri = None
+
         if calibrated and det_l is not None and det_r is not None:
             tri = reconstructor.triangulate(det_l[:2], det_r[:2])
             if tri is not None and np.isfinite(tri).all():
-                if all(abs(tri) < 300):
-                    if xy_world is None and last_xy_world is not None:
-                        xy_world = last_xy_world
-                    if xy_world is not None:
-                        pos_3d = np.array([
-                            xy_world[0],
-                            xy_world[1],
-                            tri[2]
-                        ], dtype=np.float64)
-                    else:
-                        pos_3d = tri.copy()
-                    mode_label = "3D+H"
-                    last_z_world = float(tri[2])
-                else:
-                    tri = None
-
-        if pos_3d is None and xy_world is not None:
-            z_use = last_z_world if last_z_world is not None else config.BALL_REAL_RADIUS_CM
-            pos_3d = np.array([xy_world[0], xy_world[1], z_use],
-                              dtype=np.float64)
-            mode_label = "HOMOG+Z" if last_z_world is not None else "HOMOG"
+                pos_3d = tri.copy()
+                mode_label = "3D"
 
         if pos_3d is not None:
             with _ball_lock:
@@ -573,8 +358,8 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                 _ball_latest = pos_3d
                 _ball_latest_ts = time.time()
             if frame_count % 15 == 0:
-                print(f"[POS] {mode_label or '?'}: "
-                      f"X={pos_3d[0]:6.1f}  Y={pos_3d[1]:6.1f}  Z={pos_3d[2]:6.1f}  cm")
+                print(f"[POS] {mode_label}: "
+                      f"X={pos_3d[0]:6.1f}  Y={pos_3d[1]:6.1f}  Z={pos_3d[2]:6.1f}")
             try:
                 ball_q.put_nowait(pos_3d)
             except queue.Full:
@@ -588,9 +373,7 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
                     pass
         
         # Info en frames
-        cal_status = "3D" if (calibrated and reconstructor.P_left is not None) else \
-                     "2D" if (homography_left is not None) else "NO-CAL"
-        has_homog = (homography_left is not None)
+        cal_status = "3D" if calibrated else "NO-CAL"
         for frame, det, name, tracker_side in [
             (frame_l, det_l, "L", tracker.left),
             (frame_r, det_r, "R", tracker.right)
@@ -602,73 +385,19 @@ def stereo_worker(left_src, right_src, ball_q, left_frame_q, right_frame_q):
             else:
                 cv2.putText(frame, "NO BALL", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
             cv2.putText(frame, f"[{cal_status}] {name}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,200,255), 1)
-            if has_homog:
-                cv2.putText(frame, "HOMOG", (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
             if mode_label is not None:
-                cv2.putText(frame, mode_label, (70, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,0), 1)
+                cv2.putText(frame, mode_label, (10, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,0), 1)
             if pos_3d is not None:
                 cv2.putText(frame, f"X={pos_3d[0]:.1f} Y={pos_3d[1]:.1f} Z={pos_3d[2]:.1f}",
                             (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,0), 2)
-
-        # ── AR Car Overlay (2D directo con homografía) ──
-        with _car_lock:
-            car_pose = _car_pose
-        if car_pose is not None and (homography_left_inv is not None or homography_right_inv is not None):
-            x_pb, y_pb, heading = car_pose
-
-            # Convertir posición PyBullet → cm del tablero
-            x_cm = (x_pb / FIELD_WIDTH + 0.5) * config.PLAY_AREA_WIDTH
-            y_cm = (y_pb / FIELD_LENGTH + 0.5) * config.PLAY_AREA_HEIGHT
-
-            # Tamaño del coche en cm (ajústalo a tu coche real)
-            car_w_cm = 12.0   # ancho
-            car_l_cm = 18.0  # largo
-
-            # Esquinas del coche en coordenadas del tablero (cm)
-            # El coche apunta hacia +Y cuando heading=0
-            corners_cm = np.array([
-                [-car_w_cm/2, -car_l_cm/2],
-                [ car_w_cm/2, -car_l_cm/2],
-                [ car_w_cm/2,  car_l_cm/2],
-                [-car_w_cm/2,  car_l_cm/2],
-            ], dtype=np.float64)
-
-            # Rotar según heading
-            cos_h = np.cos(heading + np.pi)  # +pi porque el mesh está girado
-            sin_h = np.sin(heading + np.pi)
-            rot = np.array([[cos_h, -sin_h], [sin_h, cos_h]], dtype=np.float64)
-            corners_rot = corners_cm @ rot.T + np.array([x_cm, y_cm])
-
-            # Proyectar a imagen usando la homografía cacheada
-            # H: mundo(cm) → imagen(px), necesitamos H_inv: imagen → mundo
-            # Así que usamos la inversa
-            for frame_target, H_inv in [(frame_l, homography_left_inv), (frame_r, homography_right_inv)]:
-                if H_inv is None:
-                    continue
-                pts_px = []
-                for cx, cy in corners_rot:
-                    pt_world = np.array([cx, cy, 1.0], dtype=np.float64)
-                    pt_img = H_inv @ pt_world
-                    if abs(pt_img[2]) > 1e-10:
-                        px = int(pt_img[0] / pt_img[2])
-                        py = int(pt_img[1] / pt_img[2])
-                        pts_px.append([px, py])
-
-                if len(pts_px) == 4:
-                    pts = np.array(pts_px, dtype=np.int32)
-                    cv2.polylines(frame_target, [pts], True, (0, 255, 255), 2)
-                    front = (pts[2] + pts[3]) // 2
-                    cv2.circle(frame_target, tuple(front), 6, (0, 0, 255), -1)
-                    center = pts.mean(axis=0).astype(int)
-                    cv2.circle(frame_target, tuple(center), 3, (255, 0, 0), -1)
-                    cv2.putText(frame_target, "CAR", tuple(pts[0]),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         try:
             left_frame_q.put_nowait(frame_l)
             right_frame_q.put_nowait(frame_r)
         except queue.Full:
             pass
+
+        frame_count += 1
 
 
 # ─────────────────────────────────────────────
@@ -708,7 +437,7 @@ def gesture_worker(frame_q):
     while True:
         ret, frame = cap.read()
         if ret:
-            cv2.putText(frame, f"GESTURE CAM [Sin MediaPipe]", (10, 30),
+            cv2.putText(frame, "GESTURE CAM [Sin MediaPipe]", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             try:
                 frame_q.put_nowait(frame)
@@ -832,7 +561,7 @@ def _set_hsv_from_roi(frame_bgr, roi):
 # ─────────────────────────────────────────────
 def main():
     print("=" * 50)
-    print("  SOCCER AR GAME - PyBullet + Stereo + Gesture")
+    print("  SOCCER AR GAME - PyBullet + Stereo")
     print("=" * 50)
     print("\nControles COCHE:")
     print("  W         : Avanzar (hacia la nariz roja)")
@@ -849,7 +578,6 @@ def main():
     cam = CameraController()
     ball_id = create_tracked_ball()
     
-    # Inicializar pose del coche para AR
     with _car_lock:
         _car_pose = (car.x, car.y, car.heading)
     
@@ -884,7 +612,6 @@ def main():
     right_window_ready = False
     last_left_frame = None
 
-    # Estado del juego
     _ball_pb_pos   = [0.0, 0.0, BALL_RADIUS]
     _ground_z_cm = None
     _ball_smooth = None
@@ -915,20 +642,6 @@ def main():
         if key_pressed('c') and not _c_was_down:
             cam.next_mode()
         _c_was_down = key_pressed('c')
-
-        if key_pressed('p') and not _p_was_down:
-            if last_left_frame is not None:
-                roi = cv2.selectROI(left_window, last_left_frame, fromCenter=False, showCrosshair=True)
-                if roi is not None and roi[2] > 5 and roi[3] > 5:
-                    if _set_hsv_from_roi(last_left_frame, roi):
-                        print("[ROI] HSV del globo actualizado")
-                    else:
-                        print("[ROI] Seleccion invalida")
-                else:
-                    print("[ROI] Seleccion invalida")
-            else:
-                print("[ROI] Espera a que llegue un frame en 'Stereo Left'")
-        _p_was_down = key_pressed('p')
 
         if key_pressed('g') and not _g_was_down:
             _g_request = True
@@ -1025,8 +738,6 @@ def main():
             )
 
         p.stepSimulation()
-
-        # Mensajes de juego desactivados
         
         # ═══════════════════════════════════════════════════════════════
         # MOSTRAR VENTANAS EN MAIN THREAD (macOS lo exige)
@@ -1059,25 +770,6 @@ def main():
         try:
             fg = gesture_queue.get_nowait()
             if fg is not None:
-                with _aruco_lock:
-                    detected = _aruco_ids["left"] | _aruco_ids["right"]
-                    in_left  = _aruco_ids["left"].copy()
-                    in_right = _aruco_ids["right"].copy()
-                panel_x, panel_y = fg.shape[1] - 160, 10
-                cv2.rectangle(fg, (panel_x - 6, panel_y - 6),
-                              (fg.shape[1] - 4, panel_y + 88), (30, 30, 30), -1)
-                cv2.putText(fg, "ArUco (0-3)", (panel_x, panel_y + 14),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-                for aid in range(4):
-                    ok_l = aid in in_left
-                    ok_r = aid in in_right
-                    color = (0, 230, 0) if (ok_l or ok_r) else (0, 0, 220)
-                    where = ("L+R" if ok_l and ok_r else
-                             "L"   if ok_l else
-                             "R"   if ok_r else "✗")
-                    row = panel_y + 30 + aid * 18
-                    cv2.putText(fg, f"#{aid}: {where}", (panel_x, row),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
                 cv2.imshow("Gesture Robot", fg)
         except queue.Empty:
             pass

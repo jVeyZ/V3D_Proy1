@@ -12,24 +12,11 @@ CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 FPS = 30
 
-# Parametros de reconstruccion 3D con dos camaras
-STEREO_DEFAULT_FOV_DEG = 65.0
-STEREO_RECALIBRATE_EVERY_N_FRAMES = 15
-
 # ============================================================
 # ÁREA DE JUEGO (plano de trabajo real, en cm)
 # ============================================================
 PLAY_AREA_WIDTH = 60.0    # ancho del rectángulo de juego
 PLAY_AREA_HEIGHT = 40.0   # alto del rectángulo de juego
-
-# Esquinas del plano de trabajo en coordenadas mundo (cm)
-# Orden: superior-izq, superior-der, inferior-der, inferior-izq
-WORLD_CORNERS = np.array([
-    [0.0, 0.0],
-    [PLAY_AREA_WIDTH, 0.0],
-    [PLAY_AREA_WIDTH, PLAY_AREA_HEIGHT],
-    [0.0, PLAY_AREA_HEIGHT]
-], dtype=np.float64)
 
 # ============================================================
 # DETECCIÓN DE PELOTA (rango HSV para ping-pong blanca)
@@ -156,9 +143,6 @@ CAMERA_GESTURE = 0
 BALL_GREEN_HSV_LOWER = np.array([29, 86, 6])
 BALL_GREEN_HSV_UPPER = np.array([64, 255, 255])
 
-# Portería AR (ArUcos)
-GOAL_MARKER_IDS = (0, 1)
-FIELD_MARKER_IDS = (0, 1, 2, 3)
 GOAL_DEPTH_CM = 12.0
 
 # Juego
