@@ -1,0 +1,70 @@
+OPENCV DESDE PYTHON:
+CALIBRACIÓN DE HOMOGRAFÍAS CON OPENCV
+INTRODUCCIÓN
+OpenCV dispone de varios métodos robustos de calibración de homografías. En el primer proyecto de
+esta asignatura, se deberá calibrar la homografía de una cámara respecto a un plano de trabajo que
+permitirá posicionar los centros de los objetos reales sobre el plano de trabajo a partir de sus centroides
+en las imágenes.
+OBJETIVOS
+El objetivo principal de esta sesión de prácticas es aprender a posicionar objetos de interés sobre un plano,
+partiendo de la detección de sus centroides en una imagen capturada por una cámara. Para ello, se podrán
+utilizar diferentes métodos robustos de calibración de homografías utilizando OpenCV desde Python.
+Además, en esta práctica se muestra un ejemplo de cómo gestionar eventos del ratón para seleccionar un
+pixel de una imagen utilizando OpenCV desde Python.
+MATERIALES
+Para desarrollar esta práctica, descargue los siguientes materiales a una carpeta de trabajo local (en
+adelante, “working_folder_path”) en el ordenador donde vaya a ejecutar el cuaderno (*.ipynb) o el
+fichero Python (*.py).
+- PoliformaT -> Recursos/2-Software-&-cuadernos/60-Jupyter lab tutorial – Homography
+- PoliformaT -> Recursos/2-Software-&-cuadernos/61-Jupyter lab tutorial - Homography calibration
+Importante >> No olvide hacer una copia de seguridad del código implementado (por ejemplo, en su
+carpeta W:) al finalizar la práctica.
+1.
+- ARRANQUE CON Jupyter lab
+Si nunca has utilizado PyCharm, es mejor empezar con Jupyter lab. Ejecuta el programa Jupyer lab desde
+un terminal “Anaconda Prompt (minicaonda 3)”, tras activar el “environment” adecuado.
+(base) C:\windows\system32> conda activate open3d_env
+(open3d_env) C:\Users\username> jupyter lab --notebook-dir “working_folder_path”
+Después de arrancar Jupyter lab, escribe en una célula de código el comando: "import cv2"
+Mediante este módulo, Python encontrará todos los métodos de Python
+que sirven de interfaz entre la librería Opencv de C++ y Python.
+Utilidad >> Para habilitar el autocompletado de código en JupyterLab, presione la tecla Tab mientras
+escribe el código.
+1.2.
+- ARRANQUE CON PyCharm
+Si prefieres comenzar a trabajar con PyCharm, deberás crear un proyecto y seleccionar el “environment”
+adecuado desde el desplegable “Environment”.
+working_folder_path
+Select environment
+Main menu
+Para crear un nuevo fichero Python (*.py) simplemente selecciona la siguiente opción del “Menu
+principal”:
+• Main menú -> File -> New -> Python File
+EJERCICIO 1: ENTENDER CÓDIGO DE COMPARACIÓN DE MÉTODOS:
+EJERCICIO 2: APLICAR LA HOMOGRAFÍA
+A partir de las imágenes fish y fish_perspective obtener la homografía que las relaciona. Para ello obtener
+X puntos en la imagen 1 y sus correspondientes puntos en la imagen 2. Una vez obtenida la matriz
+homografía comprobar su validez restaurando la imagen con perspectiva con la siguiente función:
+imagenDestino = cv2.warpPerspective(imagen, matrizHH, None)
+Nota: Se puede automatizar la obtención de puntos con el ratón:
+EJERCICIO 3: DETECCIÓN DE PUNTOS AUTOMÁTICA
+Calcular la homografía entre la imagen Lena y Lena_perspective obteniendo los puntos de forma
+automática con las siguientes funciones:
+%Funciones para calcular descriptores de puntos de interés de ORB
+MAX_FEATURES = 100
+obj = cv2.ORB_create(MAX_FEATURES)
+[kpts1, feat1] = obj.detectAndCompute(im1, None)
+%Funciones para calcular que puntos corresponden entre sí matcher
+= cv2.DescriptorMatcher_create(cv2.
+,→DESCRIPTOR_MATCHER_BRUTEFORCE_HAMMING)
+matches = matcher.match(feat1, feat2, None)
+%Función para dibujar los puntos asociados entre imágenes
+out = cv2.drawMatches(im1, kpts1, im2, kpts2, matches, None)
+Nota: “kpts1(m(i).queryIdx).pt“ es el punto (X,Y) de la imagen 1 que se
+corresponde con el punto de la imagen 2: “kpts2(m(i).trainIdx).pt”;
+4.-TAREA
+A partir de los materiales y ejemplos anteriores deberéis integrar en vuestro proyecto:
+• un método que calibre la homografía de vuestra cámara con respecto a vuestro plano
+de trabajo (intentar estimar la homografía de la manera más precisa posible),
+• además de un método que posicione (o reconstruya) sobre el plano de trabajo
+cualquier pixel de la imagen capturada.

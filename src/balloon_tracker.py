@@ -169,11 +169,11 @@ class GreenBalloonTracker:
         # Corrección Kalman
         measurement = np.array([[cx], [cy]], dtype=np.float32)
         self._kalman.correct(measurement)
-        pred = self._kalman.predict()
 
-        # Usar posición suavizada por Kalman
-        smooth_cx = int(pred[0, 0])
-        smooth_cy = int(pred[1, 0])
+        # Usar estado corregido (statePost) como posición suavizada
+        state = self._kalman.statePost
+        smooth_cx = int(state[0, 0])
+        smooth_cy = int(state[1, 0])
 
         self._lost_counter = 0
         if self._last_valid is not None:
@@ -187,8 +187,6 @@ class GreenBalloonTracker:
     def draw_trail(self, frame):
         """Dibuja el trail del globo sobre el frame."""
         for i in range(1, len(self.pts)):
-            if self.pts[i - 1] is None or self.pts[i] is None:
-                continue
             thickness = int(np.sqrt(self.trail_size / float(i + 1)) * 2.5)
             cv2.line(
                 frame,

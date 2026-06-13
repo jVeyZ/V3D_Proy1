@@ -12,6 +12,7 @@ import os
 import queue
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -21,7 +22,7 @@ from pynput import keyboard as pynput_kb
 
 import src.game_config as config
 
-os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 balloon_queue = queue.Queue(maxsize=5)
 stereo_left_queue = queue.Queue(maxsize=2)
@@ -35,13 +36,11 @@ _balloon_lock = threading.Lock()
 _balloon_latest = None
 _balloon_latest_ts = 0.0
 _robot_world_lock = threading.Lock()
-_robot_world_pose = np.array([config.PLAY_AREA_WIDTH / 2, 0.0, 0.0], dtype=np.float64)
+_robot_world_pose = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN
 # ─────────────────────────────────────────────
-FIELD_LENGTH = 12.0
-FIELD_WIDTH = 8.0
 ROBOT_SCALE = 1.5
 ROBOT_HALF_EXTENTS = [0.25 * ROBOT_SCALE, 0.56 * ROBOT_SCALE, 0.19 * ROBOT_SCALE]
 ROBOT_Z_CENTER = 0.19 * ROBOT_SCALE
@@ -53,65 +52,15 @@ ROBOT_COLOR = [0.9, 0.2, 0.2, 1.0]
 CATCH_RADIUS = 0.95
 GROUND_TOUCH_HEIGHT_CM = 8.0
 CATCH_COOLDOWN_SEC = 1.5
-Z_SCALE = 0.05
 HSV_MARGIN = np.array([12, 50, 50], dtype=np.int32)
 BALLOON_SMOOTH_ALPHA = 0.35
 BALLOON_MAX_JUMP = 1.2
 Z_DEADZONE_CM = 1.5
 Z_MAX_STEP_CM = 3.0
 HOLD_LAST_SEC = 1.5
-XY_MARGIN_CM = 5.0
-Z_MAX_HEIGHT_CM = 60.0
 Z_HEIGHT_GAIN = 2.0
-Z_ABS_MAX_CM = 150.0
 GROUND_LOCK_CM = 2.0
 GROUND_ADAPT_ALPHA = 0.15
-
-
-# ─────────────────────────────────────────────
-# TEXTURA DEL CAMPO
-# ─────────────────────────────────────────────
-def create_field_texture(path="assets/field_texture.png"):
-    os.makedirs("assets", exist_ok=True)
-    W, H = 512, 768
-    img = np.zeros((H, W, 3), dtype=np.uint8)
-
-    stripe_h = H // 12
-    for i in range(12):
-        c = (30, 120, 30) if i % 2 == 0 else (45, 160, 45)
-        img[i * stripe_h : (i + 1) * stripe_h, :] = c
-
-    white = (255, 255, 255)
-    lw = 3
-
-    margin_x = int(W * 0.04)
-    margin_y = int(H * 0.04)
-
-    cv2.rectangle(img, (margin_x, margin_y), (W - margin_x, H - margin_y), white, lw)
-    cy = H // 2
-    cv2.line(img, (margin_x, cy), (W - margin_x, cy), white, lw)
-    cr = int(W * 0.12)
-    cv2.circle(img, (W // 2, cy), cr, white, lw)
-    cv2.circle(img, (W // 2, cy), 4, white, -1)
-
-    pa_h = int(H * 0.14)
-    pa_w = int(W * 0.50)
-    px0 = W // 2 - pa_w // 2
-    cv2.rectangle(img, (px0, margin_y), (px0 + pa_w, margin_y + pa_h), white, lw)
-    cv2.rectangle(
-        img, (px0, H - margin_y - pa_h), (px0 + pa_w, H - margin_y), white, lw
-    )
-
-    ga_h = int(H * 0.055)
-    ga_w = int(W * 0.25)
-    gx0 = W // 2 - ga_w // 2
-    cv2.rectangle(img, (gx0, margin_y), (gx0 + ga_w, margin_y + ga_h), white, lw)
-    cv2.rectangle(
-        img, (gx0, H - margin_y - ga_h), (gx0 + ga_w, H - margin_y), white, lw
-    )
-
-    cv2.imwrite(path, img)
-    return path
 
 
 # ─────────────────────────────────────────────
@@ -120,56 +69,36 @@ def create_field_texture(path="assets/field_texture.png"):
 def init_simulation():
     use_gui = os.environ.get("PYBULLET_DIRECT") not in ("1", "true", "TRUE")
     physics_client = p.connect(p.GUI if use_gui else p.DIRECT)
-    p.configureDebugVisualizer(p.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)
+    p.configureDebugVisualizer(p.COV_ENABLE_KEYBOARD_SHORTCUTS, 1)
     p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
     p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 0)
+    p.configureDebugVisualizer(p.COV_ENABLE_MOUSE_PICKING, 1)
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.setGravity(0, 0, -9.8)
     p.resetDebugVisualizerCamera(15, 60, -30, [0, 0, 0])
 
-    field_tex = create_field_texture()
-    plane_shape = p.createCollisionShape(
-        p.GEOM_BOX, halfExtents=[FIELD_WIDTH / 2, FIELD_LENGTH / 2, 0.01]
-    )
+    # ── Open arena: suelo enorme sin límites ──
+    ground_half = 50.0
+    plane_shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[ground_half, ground_half, 0.01])
     plane_visual = p.createVisualShape(
-        p.GEOM_BOX,
-        halfExtents=[FIELD_WIDTH / 2, FIELD_LENGTH / 2, 0.01],
-        rgbaColor=[1, 1, 1, 1],
-        specularColor=[0.1, 0.1, 0.1],
-    )
-    texture_id = p.loadTexture(field_tex)
-    ground_id = p.createMultiBody(
-        0, plane_shape, plane_visual, basePosition=[0, 0, -0.01]
-    )
-    p.changeVisualShape(ground_id, -1, textureUniqueId=texture_id)
+        p.GEOM_BOX, halfExtents=[ground_half, ground_half, 0.01],
+        rgbaColor=[0.15, 0.35, 0.15, 1.0], specularColor=[0.05, 0.05, 0.05])
+    p.createMultiBody(0, plane_shape, plane_visual, basePosition=[0, 0, -0.01])
 
-    create_field_boundaries()
+    # ── Marcas de referencia en el suelo cada 1 m ──
+    for i in range(-40, 41, 10):
+        si = i * config.WORLD_SCALE
+        half_extent = 40 * config.WORLD_SCALE
+        p.addUserDebugLine([-half_extent, si, 0.01],
+                           [half_extent, si, 0.01],
+                           [0.3, 0.3, 0.3], 1, lifeTime=0)
+        p.addUserDebugLine([si, -half_extent, 0.01],
+                           [si, half_extent, 0.01],
+                           [0.3, 0.3, 0.3], 1, lifeTime=0)
+
     robot_id = create_robot()
     p.changeVisualShape(robot_id, -1, rgbaColor=ROBOT_COLOR)
     return physics_client, robot_id
-
-
-def create_field_boundaries():
-    wall_h, wall_thick = 1.0, 0.1
-    red = [0.85, 0.1, 0.1, 1.0]
-    for x in [-FIELD_WIDTH / 2 - wall_thick, FIELD_WIDTH / 2 + wall_thick]:
-        col = p.createCollisionShape(
-            p.GEOM_BOX, halfExtents=[wall_thick, FIELD_LENGTH / 2, wall_h]
-        )
-        vis = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[wall_thick, FIELD_LENGTH / 2, wall_h],
-            rgbaColor=red,
-        )
-        p.createMultiBody(0, col, vis, [x, 0, wall_h / 2])
-    for y in [-FIELD_LENGTH / 2 - wall_thick, FIELD_LENGTH / 2 + wall_thick]:
-        col = p.createCollisionShape(
-            p.GEOM_BOX, halfExtents=[FIELD_WIDTH / 2, wall_thick, wall_h]
-        )
-        vis = p.createVisualShape(
-            p.GEOM_BOX, halfExtents=[FIELD_WIDTH / 2, wall_thick, wall_h], rgbaColor=red
-        )
-        p.createMultiBody(0, col, vis, [0, y, wall_h / 2])
 
 
 def create_robot():
@@ -178,8 +107,7 @@ def create_robot():
     Si existe assets/Robot.obj se usa como malla visual. Si no, se usa una caja
     PyBullet nativa para que la demo sea autocontenida.
     """
-    mesh_path = "assets/Robot.obj"
-    start_y = -FIELD_LENGTH / 2 + 1.5
+    mesh_path = str(_PROJECT_ROOT / "assets" / "Robot.obj")
 
     col = p.createCollisionShape(p.GEOM_BOX, halfExtents=ROBOT_HALF_EXTENTS)
     if os.path.exists(mesh_path):
@@ -202,7 +130,7 @@ def create_robot():
         baseMass=0,
         baseCollisionShapeIndex=col,
         baseVisualShapeIndex=vis,
-        basePosition=[0, start_y, ROBOT_Z_CENTER],
+        basePosition=[0, 0.0, ROBOT_Z_CENTER],
         baseOrientation=base_orn,
     )
     return robot_id
@@ -224,24 +152,37 @@ def create_tracked_balloon():
 # TECLADO FIABLE (pynput)
 # ─────────────────────────────────────────────
 _keys_down = set()
+_ARROW_MAP = {
+    pynput_kb.Key.up: "ARROW_UP",
+    pynput_kb.Key.down: "ARROW_DOWN",
+    pynput_kb.Key.left: "ARROW_LEFT",
+    pynput_kb.Key.right: "ARROW_RIGHT",
+}
 
 
 def _on_press(key):
     try:
         _keys_down.add(key.char)
     except AttributeError:
-        _keys_down.add(key)
+        name = _ARROW_MAP.get(key)
+        if name:
+            _keys_down.add(name)
+        else:
+            _keys_down.add(key)
 
 
 def _on_release(key):
     try:
         _keys_down.discard(key.char)
     except AttributeError:
-        _keys_down.discard(key)
+        name = _ARROW_MAP.get(key)
+        if name:
+            _keys_down.discard(name)
+        else:
+            _keys_down.discard(key)
 
 
 _kb_listener = pynput_kb.Listener(on_press=_on_press, on_release=_on_release)
-_kb_listener.start()
 
 
 def key_pressed(c):
@@ -249,38 +190,49 @@ def key_pressed(c):
 
 
 def pybullet_robot_to_world_cm(robot_x, robot_y):
-    """Convierte posición PyBullet del robot a coordenadas del mundo de juego en cm."""
-    world_x = (robot_x / FIELD_WIDTH + 0.5) * config.PLAY_AREA_WIDTH
-    world_y = (robot_y / FIELD_LENGTH + 0.5) * config.PLAY_AREA_HEIGHT
+    """Convierte posición PyBullet del robot a coordenadas ChArUco (cm) para proyección AR.
+
+    El globo se triangula en coordenadas ChArUco, luego se aplica WORLD_SWAP_XY/FLIP
+    para pasarlas al sistema de juego antes de mapear a PyBullet. Para la proyección
+    inversa (robot → píxeles de cámara) hay que deshacer esos mismos transforms.
+    """
+    world_x = robot_x / config.WORLD_SCALE
+    world_y = robot_y / config.WORLD_SCALE
+    if config.WORLD_FLIP_Y:
+        world_y = -world_y
+    if config.WORLD_FLIP_X:
+        world_x = -world_x
+    if config.WORLD_SWAP_XY:
+        world_x, world_y = world_y, world_x
     return np.array([world_x, world_y, 0.0], dtype=np.float64)
 
 
-def draw_robot_ar_overlay(frame, reconstructor):
-    """Proyecta la huella del robot virtual sobre la cámara izquierda."""
+def draw_robot_ar_overlay(frame, reconstructor, project_fn, label="ROBOT"):
+    """Proyecta la huella del robot virtual sobre el frame de cámara."""
     if not reconstructor.has_world_transform:
         return
     with _robot_world_lock:
         center = _robot_world_pose.copy()
 
-    half_x_cm = ROBOT_HALF_EXTENTS[0] / FIELD_WIDTH * config.PLAY_AREA_WIDTH
-    half_y_cm = ROBOT_HALF_EXTENTS[1] / FIELD_LENGTH * config.PLAY_AREA_HEIGHT
+    half_x_cm = ROBOT_HALF_EXTENTS[0] / config.WORLD_SCALE
+    half_y_cm = ROBOT_HALF_EXTENTS[1] / config.WORLD_SCALE
     corners_world = [
         center + np.array([-half_x_cm, -half_y_cm, 0.0]),
         center + np.array([half_x_cm, -half_y_cm, 0.0]),
         center + np.array([half_x_cm, half_y_cm, 0.0]),
         center + np.array([-half_x_cm, half_y_cm, 0.0]),
     ]
-    projected = [reconstructor.project_world_to_left(pt) for pt in corners_world]
+    projected = [project_fn(pt) for pt in corners_world]
     if any(pt is None for pt in projected):
         return
     pts = np.array(projected, dtype=np.int32).reshape((-1, 1, 2))
     cv2.polylines(frame, [pts], isClosed=True, color=(255, 80, 40), thickness=2)
-    center_px = reconstructor.project_world_to_left(center)
+    center_px = project_fn(center)
     if center_px is not None:
         cv2.circle(frame, center_px, 5, (255, 80, 40), -1)
         cv2.putText(
             frame,
-            "ROBOT AR",
+            label,
             (center_px[0] + 8, center_px[1] - 8),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -293,7 +245,7 @@ class RobotController:
     def __init__(self, robot_id):
         self.robot_id = robot_id
         self.x = 0.0
-        self.y = -FIELD_LENGTH / 2 + 1.5
+        self.y = 0.0
         self.heading = 0.0
         self.last_gesture = None
 
@@ -330,10 +282,6 @@ class RobotController:
         self.x -= speed * np.sin(self.heading) * dt
         self.y += speed * np.cos(self.heading) * dt
 
-        margin = 0.5
-        self.x = max(-FIELD_WIDTH / 2 + margin, min(FIELD_WIDTH / 2 - margin, self.x))
-        self.y = max(-FIELD_LENGTH / 2 + margin, min(FIELD_LENGTH / 2 - margin, self.y))
-
         z = ROBOT_Z_CENTER
         q_z = p.getQuaternionFromEuler([0, 0, self.heading + np.pi])
         q_x = p.getQuaternionFromEuler([np.pi / 2, 0, 0])
@@ -354,30 +302,33 @@ class RobotController:
 # ─────────────────────────────────────────────
 # HILO ESTÉREO
 # ─────────────────────────────────────────────
-def stereo_worker(left_src, right_src, balloon_q, left_frame_q, right_frame_q):
+def stereo_worker(cap_l, cap_r, balloon_q, left_frame_q, right_frame_q):
     from src.balloon_tracker import StereoGreenBalloonTracker
     from src.stereo import Stereo3DReconstructor
 
-    print(f"[CAM] Abriendo cámaras: izq={left_src}, der={right_src}")
-    cap_l = cv2.VideoCapture(left_src)
-    cap_r = cv2.VideoCapture(right_src)
+    cap_l.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+    cap_l.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+    cap_r.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+    cap_r.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
 
-    if not cap_l.isOpened():
-        print(f"[CAM] ERROR: No se pudo abrir cámara izquierda ({left_src})")
-        return
-    if not cap_r.isOpened():
-        print(f"[CAM] ERROR: No se pudo abrir cámara derecha ({right_src})")
-        return
+    actual_w_l = int(cap_l.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h_l = int(cap_l.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_w_r = int(cap_r.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h_r = int(cap_r.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"[CAM] Solicitado: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}")
+    print(f"[CAM] Left real:  {actual_w_l}x{actual_h_l} | Right real: {actual_w_r}x{actual_h_r}")
 
-    for cap in [cap_l, cap_r]:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    target_w = config.CAMERA_WIDTH
+    target_h = config.CAMERA_HEIGHT
+    if (actual_w_l, actual_h_l) != (target_w, target_h) or (actual_w_r, actual_h_r) != (target_w, target_h):
+        print(f"[CAM] AVISO: al menos una camara no soporta la resolucion pedida. "
+              f"Forzando resize a {target_w}x{target_h} en todas.")
 
     tracker = StereoGreenBalloonTracker()
     reconstructor = Stereo3DReconstructor()
-    calib_path = os.path.join(os.getcwd(), "calibration", "stereo_charuco.npz")
-    world_transform_path = os.path.join(
-        os.getcwd(), "calibration", "world_transform.npz"
+    calib_path = str(_PROJECT_ROOT / "calibration" / "stereo_charuco.npz")
+    world_transform_path = str(
+        _PROJECT_ROOT / "calibration" / "world_transform.npz"
     )
     if os.path.exists(calib_path):
         if reconstructor.load_calibration(calib_path):
@@ -403,14 +354,40 @@ def stereo_worker(left_src, right_src, balloon_q, left_frame_q, right_frame_q):
                 print(
                     f"[CAL] RMS transformación mundo={reconstructor.world_rms_cm:.3f} cm"
                 )
+            world_imgs = _PROJECT_ROOT / "calibration" / "world_charuco"
+            reconstructor.refine_fundamental_from_floor(
+                str(world_imgs / "left" / "left_000.png"),
+                str(world_imgs / "right" / "right_000.png"),
+            )
 
     calibrated = reconstructor.is_calibrated
     if calibrated:
+        calib_size = reconstructor.image_size
+        if calib_size is not None and calib_size != (target_w, target_h):
+            print(
+                f"[CAM] *** ERROR: resolucion runtime ({target_w}x{target_h}) "
+                f"no coincide con calibracion ({calib_size[0]}x{calib_size[1]}). "
+                f"La triangulacion sera incorrecta. ***"
+            )
+            print(
+                "[CAM]   Solucion: recalibra a la resolucion actual o cambia "
+                "CAMERA_WIDTH/HEIGHT en game_config.py para que coincida."
+            )
         print("[CAM] Iniciando — calibración estéreo cargada (sin ArUco en runtime)")
         print(f"[CAM]   K_left=\n{reconstructor.K_left}")
         print(f"[CAM]   K_right=\n{reconstructor.K_right}")
         if reconstructor.has_world_transform:
             print("[CAM]   Sistema de mundo: calibration/world_transform.npz")
+            rp_world = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            pl = reconstructor.project_world_to_left(rp_world)
+            pr = reconstructor.project_world_to_right(rp_world)
+            if pl and pr:
+                F = reconstructor.F_refined if reconstructor.F_refined is not None else reconstructor.F
+                if F is not None:
+                    line = F @ np.array([pl[0], pl[1], 1.0], dtype=np.float64)
+                    a, b, c_ = line[0], line[1], line[2]
+                    dist = abs(a * pr[0] + b * pr[1] + c_) / np.hypot(a, b)
+                    print(f"[CAM]   AR consistency: robot proj L={pl} R={pr} epi-dist={dist:.1f}px")
         else:
             print(
                 "[CAM]   WARNING: sin world_transform.npz; XYZ queda en coordenadas de cámara izquierda"
@@ -433,6 +410,13 @@ def stereo_worker(left_src, right_src, balloon_q, left_frame_q, right_frame_q):
             time.sleep(0.001)
             continue
 
+        h_l, w_l = frame_l.shape[:2]
+        h_r, w_r = frame_r.shape[:2]
+        if (w_l, h_l) != (target_w, target_h):
+            frame_l = cv2.resize(frame_l, (target_w, target_h))
+        if (w_r, h_r) != (target_w, target_h):
+            frame_r = cv2.resize(frame_r, (target_w, target_h))
+
         # Tracking del globo verde
         with _hsv_lock:
             global _hsv_updated
@@ -454,19 +438,24 @@ def stereo_worker(left_src, right_src, balloon_q, left_frame_q, right_frame_q):
         epipolar_error = None
 
         if calibrated and det_l is not None and det_r is not None:
-            epipolar_error = reconstructor.epipolar_error_px(det_l[:2], det_r[:2])
-            epipolar_ok = (
-                epipolar_error is None or epipolar_error <= config.EPIPOLAR_MAX_ERROR_PX
-            )
-            if epipolar_ok:
-                tri = reconstructor.triangulate_world(det_l[:2], det_r[:2])
-                if tri is not None and np.isfinite(tri).all():
-                    pos_3d = tri.copy()
-                    mode_label = "WORLD" if reconstructor.has_world_transform else "CAM"
-            elif frame_count % 15 == 0:
-                print(
-                    f"[STEREO] Correspondencia rechazada por error epipolar={epipolar_error:.2f}px"
-                )
+            snap_l, snap_r = reconstructor.snap_to_epipolar(det_l[:2], det_r[:2])
+            epipolar_error = reconstructor.epipolar_error_px(snap_l, snap_r)
+            if frame_count == 1:
+                corr_l = np.hypot(snap_l[0] - det_l[0], snap_l[1] - det_l[1])
+                corr_r = np.hypot(snap_r[0] - det_r[0], snap_r[1] - det_r[1])
+                print(f"[STEREO] Epipolar correction: L={corr_l:.1f}px R={corr_r:.1f}px")
+            tri = reconstructor.triangulate_world(snap_l, snap_r)
+            if tri is not None and np.isfinite(tri).all():
+                pos_3d = tri.copy()
+                if config.WORLD_SWAP_XY:
+                    pos_3d[0], pos_3d[1] = pos_3d[1], pos_3d[0]
+                if config.WORLD_FLIP_X:
+                    pos_3d[0] = -pos_3d[0]
+                if config.WORLD_FLIP_Y:
+                    pos_3d[1] = -pos_3d[1]
+                if config.WORLD_FLIP_Z:
+                    pos_3d[2] = -pos_3d[2]
+                mode_label = "WORLD" if reconstructor.has_world_transform else "CAM"
 
         if pos_3d is not None:
             with _balloon_lock:
@@ -528,7 +517,11 @@ def stereo_worker(left_src, right_src, balloon_q, left_frame_q, right_frame_q):
                 1,
             )
             if name == "L":
-                draw_robot_ar_overlay(frame, reconstructor)
+                draw_robot_ar_overlay(frame, reconstructor,
+                                      reconstructor.project_world_to_left, "ROBOT AR")
+            else:
+                draw_robot_ar_overlay(frame, reconstructor,
+                                      reconstructor.project_world_to_right, "ROBOT AR")
             if mode_label is not None:
                 ep_txt = (
                     "" if epipolar_error is None else f" epi={epipolar_error:.1f}px"
@@ -552,6 +545,37 @@ def stereo_worker(left_src, right_src, balloon_q, left_frame_q, right_frame_q):
                     (255, 255, 0),
                     2,
                 )
+
+        # ── Epipolar debug: linea de la deteccion del otro lado ──
+        if calibrated and det_l is not None and det_r is not None:
+            F = reconstructor.F_refined if reconstructor.F_refined is not None else reconstructor.F
+            if F is not None:
+                l_from_left = F @ np.array([det_l[0], det_l[1], 1.0], dtype=np.float64)
+                l_from_right = F.T @ np.array([det_r[0], det_r[1], 1.0], dtype=np.float64)
+                h_l, w_l = frame_l.shape[:2]
+                h_r, w_r = frame_r.shape[:2]
+                for (frame, line, name, w, h) in [(frame_r, l_from_left, "R", w_r, h_r),
+                                                    (frame_l, l_from_right, "L", w_l, h_l)]:
+                    a, b, c = line[0], line[1], line[2]
+                    if abs(b) > 1e-6:
+                        x0, y0 = 0, int(-c / b)
+                        x1, y1 = w - 1, int(-(a * (w - 1) + c) / b)
+                    elif abs(a) > 1e-6:
+                        x0, y0 = int(-c / a), 0
+                        x1, y1 = int(-(b * (h - 1) + c) / a), h - 1
+                    else:
+                        continue
+                    cv2.line(frame, (x0, y0), (x1, y1), (255, 0, 255), 1, cv2.LINE_AA)
+
+        # ── Proyectar grid de suelo en ambos frames ──
+        if reconstructor.has_world_transform and frame_count % 30 == 0:
+            for gx in range(-20, 100, 20):
+                for gy in range(-20, 100, 20):
+                    for (frame, proj_fn) in [(frame_l, reconstructor.project_world_to_left),
+                                              (frame_r, reconstructor.project_world_to_right)]:
+                        p = proj_fn(np.array([gx, gy, 0.0]))
+                        if p is not None and 0 <= p[0] < frame.shape[1] and 0 <= p[1] < frame.shape[0]:
+                            cv2.circle(frame, p, 1, (0, 255, 0), -1)
 
         try:
             left_frame_q.put_nowait(frame_l)
@@ -579,7 +603,7 @@ def _put_latest(q, item):
             pass
 
 
-def gesture_worker(frame_q, command_q):
+def gesture_worker(cap, frame_q, command_q):
     gesture_controller_cls = None
     try:
         from src.gesture_robot import GestureRobotController
@@ -589,7 +613,8 @@ def gesture_worker(frame_q, command_q):
         print(f"[GESTURE] gesture_robot no disponible: {e}")
 
     if gesture_controller_cls is not None:
-        controller = gesture_controller_cls(camera_index=config.CAMERA_GESTURE)
+        model_path = str(_PROJECT_ROOT / "assets" / "gesture_recognizer.task")
+        controller = gesture_controller_cls(camera_index=config.CAMERA_GESTURE, camera=cap, model_path=model_path)
         if controller.start():
             print("[GESTURE] Activo")
             while True:
@@ -606,7 +631,6 @@ def gesture_worker(frame_q, command_q):
                 "[GESTURE] GestureRobotController no pudo iniciarse; fallback a cámara en bruto"
             )
 
-    cap = cv2.VideoCapture(config.CAMERA_GESTURE)
     if not cap.isOpened():
         print(f"[GESTURE] No se pudo abrir cámara {config.CAMERA_GESTURE}")
         return
@@ -633,11 +657,15 @@ def gesture_worker(frame_q, command_q):
 # CÁMARA PYBULLET
 # ─────────────────────────────────────────────
 class CameraController:
-    MODES = ["cenital", "follow"]
+    MODES = ["free", "cenital", "follow"]
 
     def __init__(self):
         self.mode_idx = 0
         self.smooth_pos = np.array([0.0, 0.0, 0.0])
+        self.dist = 15.0
+        self.yaw = 60.0
+        self.pitch = -30.0
+        self.target = np.array([0.0, 0.0, 0.0])
 
     def get_mode(self):
         return self.MODES[self.mode_idx]
@@ -648,71 +676,16 @@ class CameraController:
 
     def update(self, robot_pos):
         mode = self.get_mode()
-        if mode == "cenital":
+        target = np.array(robot_pos)
+        self.smooth_pos += (target - self.smooth_pos) * 0.12
+
+        if mode == "free":
+            self.target = self.smooth_pos
+            p.resetDebugVisualizerCamera(self.dist, self.yaw, self.pitch, self.target.tolist())
+        elif mode == "cenital":
             p.resetDebugVisualizerCamera(18, 90, -89, robot_pos)
         elif mode == "follow":
-            target = np.array(robot_pos)
-            self.smooth_pos += (target - self.smooth_pos) * 0.12
             p.resetDebugVisualizerCamera(6, 180, -30, self.smooth_pos.tolist())
-
-
-class ROISelector:
-    def __init__(self):
-        self.enabled = False
-        self.dragging = False
-        self.start = None
-        self.end = None
-        self.ready = False
-
-    def enable(self):
-        self.enabled = True
-        self.dragging = False
-        self.start = None
-        self.end = None
-        self.ready = False
-
-    def disable(self):
-        self.enabled = False
-        self.dragging = False
-        self.start = None
-        self.end = None
-        self.ready = False
-
-    def on_mouse(self, event, x, y, _flags, _param):
-        if not self.enabled:
-            return
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.dragging = True
-            self.start = (x, y)
-            self.end = (x, y)
-        elif event == cv2.EVENT_MOUSEMOVE and self.dragging:
-            self.end = (x, y)
-        elif event == cv2.EVENT_LBUTTONUP and self.dragging:
-            self.end = (x, y)
-            self.dragging = False
-            self.ready = True
-
-    def get_roi(self):
-        if self.start is None or self.end is None:
-            return None
-        x0 = min(self.start[0], self.end[0])
-        y0 = min(self.start[1], self.end[1])
-        x1 = max(self.start[0], self.end[0])
-        y1 = max(self.start[1], self.end[1])
-        w = x1 - x0
-        h = y1 - y0
-        if w <= 5 or h <= 5:
-            return None
-        return (x0, y0, w, h)
-
-    def draw(self, frame):
-        if not self.enabled or self.start is None or self.end is None:
-            return
-        x0 = min(self.start[0], self.end[0])
-        y0 = min(self.start[1], self.end[1])
-        x1 = max(self.start[0], self.end[0])
-        y1 = max(self.start[1], self.end[1])
-        cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 255, 255), 2)
 
 
 def _set_hsv_from_roi(frame_bgr, roi):
@@ -739,6 +712,7 @@ def _set_hsv_from_roi(frame_bgr, roi):
     return True
 
 
+
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
@@ -758,11 +732,27 @@ def main():
     print("  W/S       : Avanzar / retroceder robot")
     print("  A/D       : Girar robot")
     print("  R         : Reset")
-    print("  C         : Cambiar cámara virtual")
+    print("  C         : Cambiar cámara virtual (free → cenital → follow)")
+    print("  Free cam  : Flechas=rotar  Z/X=zoom")
     print("  G         : Calibrar suelo con la altura estéreo actual del globo")
     print("  P         : Calibrar HSV del globo seleccionando ROI en Stereo Left")
     print("  Q / ESC   : Salir")
     print("\nIniciando...")
+
+    # Arrancar listener de teclado
+    _kb_listener.start()
+
+    # Abrir cámaras en el hilo principal (obligatorio en macOS)
+    print("[CAM] Abriendo cámaras...")
+    cap_l = cv2.VideoCapture(config.CAMERA_LEFT)
+    cap_r = cv2.VideoCapture(config.CAMERA_RIGHT)
+    cap_g = cv2.VideoCapture(config.CAMERA_GESTURE)
+    if not cap_l.isOpened():
+        print(f"[CAM] ERROR: No se pudo abrir cámara izquierda ({config.CAMERA_LEFT})")
+    if not cap_r.isOpened():
+        print(f"[CAM] ERROR: No se pudo abrir cámara derecha ({config.CAMERA_RIGHT})")
+    if not cap_g.isOpened():
+        print(f"[CAM] ERROR: No se pudo abrir cámara de gestos ({config.CAMERA_GESTURE})")
 
     _physics_client, robot_id = init_simulation()
     robot = RobotController(robot_id)
@@ -772,19 +762,15 @@ def main():
     # Lanzar hilos
     t_stereo = threading.Thread(
         target=stereo_worker,
-        args=(
-            config.CAMERA_LEFT,
-            config.CAMERA_RIGHT,
-            balloon_queue,
-            stereo_left_queue,
-            stereo_right_queue,
-        ),
+        args=(cap_l, cap_r, balloon_queue, stereo_left_queue, stereo_right_queue),
         daemon=True,
     )
     t_stereo.start()
 
     t_gesture = threading.Thread(
-        target=gesture_worker, args=(gesture_queue, gesture_command_queue), daemon=True
+        target=gesture_worker,
+        args=(cap_g, gesture_queue, gesture_command_queue),
+        daemon=True,
     )
     t_gesture.start()
 
@@ -796,7 +782,6 @@ def main():
     _g_was_down = False
     _g_request = False
 
-    roi_selector = ROISelector()
     left_window = "Stereo Left"
     right_window = "Stereo Right"
     left_window_ready = False
@@ -806,7 +791,6 @@ def main():
     _balloon_pb_pos = [0.0, 0.0, BALLOON_RADIUS]
     _ground_z_cm = None
     _balloon_smooth = None
-    _balloon_smooth_z = None
     _latest_gesture_payload = None
     score = 0
     attempts = 0
@@ -836,10 +820,13 @@ def main():
 
         if key_pressed("r") and not _r_was_down:
             robot.x = 0.0
-            robot.y = -FIELD_LENGTH / 2 + 1.5
+            robot.y = 0.0
             robot.heading = 0.0
+            q_z = p.getQuaternionFromEuler([0, 0, np.pi])
+            q_x = p.getQuaternionFromEuler([np.pi / 2, 0, 0])
+            _, base_orn = p.multiplyTransforms([0, 0, 0], q_z, [0, 0, 0], q_x)
             p.resetBasePositionAndOrientation(
-                robot_id, [robot.x, robot.y, 0.19], [0, 0, 0, 1]
+                robot_id, [robot.x, robot.y, ROBOT_Z_CENTER], base_orn
             )
             print("[GAME] Reset")
         _r_was_down = key_pressed("r")
@@ -847,6 +834,23 @@ def main():
         if key_pressed("c") and not _c_was_down:
             cam.next_mode()
         _c_was_down = key_pressed("c")
+
+        # ── Controles de cámara libre ──
+        if cam.get_mode() == "free":
+            speed = 120.0 * dt
+            if key_pressed("ARROW_LEFT"):
+                cam.yaw -= speed
+            if key_pressed("ARROW_RIGHT"):
+                cam.yaw += speed
+            if key_pressed("ARROW_UP"):
+                cam.pitch = min(0, cam.pitch + speed)
+            if key_pressed("ARROW_DOWN"):
+                cam.pitch = max(-89, cam.pitch - speed)
+            if key_pressed("z"):
+                cam.dist = max(1, cam.dist - speed * 5)
+            if key_pressed("x"):
+                cam.dist = min(80, cam.dist + speed * 5)
+            cam.yaw %= 360
 
         if key_pressed("g") and not _g_was_down:
             _g_request = True
@@ -884,20 +888,10 @@ def main():
             z_bad = True
 
         if world_pos is not None:
-            if (
-                x_cm < -XY_MARGIN_CM
-                or x_cm > config.PLAY_AREA_WIDTH + XY_MARGIN_CM
-                or y_cm < -XY_MARGIN_CM
-                or y_cm > config.PLAY_AREA_HEIGHT + XY_MARGIN_CM
-            ):
-                world_pos = None
-            elif abs(z_cm) > Z_ABS_MAX_CM:
+            if abs(z_cm) > 1000.0:
                 z_bad = True
 
         if world_pos is not None:
-            x_cm = min(max(x_cm, 0.0), config.PLAY_AREA_WIDTH)
-            y_cm = min(max(y_cm, 0.0), config.PLAY_AREA_HEIGHT)
-
             if z_bad:
                 if _ground_z_cm is not None:
                     z_cm = _ground_z_cm
@@ -906,13 +900,15 @@ def main():
 
             if _g_request:
                 _ground_z_cm = z_cm
-                _balloon_smooth_z = None
+                _balloon_smooth = None
                 _g_request = False
                 print(f"[BALLOON] Suelo calibrado manual: {_ground_z_cm:.1f} cm")
 
             if _ground_z_cm is None:
                 _ground_z_cm = z_cm
                 print(f"[BALLOON] Suelo inicial automático: {_ground_z_cm:.1f} cm")
+                print("[BALLOON]   Asegúrate de que el globo está en el suelo. "
+                      "Si no, pulsa G con el globo en el suelo para recalibrar.")
 
             height_cm_raw = abs(z_cm - _ground_z_cm)
             if height_cm_raw < Z_DEADZONE_CM:
@@ -921,35 +917,33 @@ def main():
                 _ground_z_cm = (
                     1.0 - GROUND_ADAPT_ALPHA
                 ) * _ground_z_cm + GROUND_ADAPT_ALPHA * z_cm
-            height_cm = min(height_cm_raw * Z_HEIGHT_GAIN, Z_MAX_HEIGHT_CM)
+            height_cm = height_cm_raw * Z_HEIGHT_GAIN
 
-            x_pb = (x_cm / config.PLAY_AREA_WIDTH - 0.5) * FIELD_WIDTH
-            y_pb = (y_cm / config.PLAY_AREA_HEIGHT - 0.5) * FIELD_LENGTH
-            z_pb = BALLOON_RADIUS + height_cm * Z_SCALE
+            x_pb = x_cm * config.WORLD_SCALE
+            y_pb = y_cm * config.WORLD_SCALE
+            z_pb = BALLOON_RADIUS + height_cm * config.WORLD_SCALE
 
-            if _balloon_smooth_z is None:
-                _balloon_smooth_z = z_pb
-            else:
-                max_step = Z_MAX_STEP_CM * Z_SCALE
-                delta_z = z_pb - _balloon_smooth_z
+            if _balloon_smooth is not None:
+                max_step = Z_MAX_STEP_CM * config.WORLD_SCALE
+                prev_z = float(_balloon_smooth[2])
+                delta_z = z_pb - prev_z
                 if abs(delta_z) > max_step:
-                    z_pb = _balloon_smooth_z + np.sign(delta_z) * max_step
-                _balloon_smooth_z += (z_pb - _balloon_smooth_z) * 0.3
-                z_pb = _balloon_smooth_z
+                    z_pb = prev_z + np.sign(delta_z) * max_step
+                z_pb = prev_z + (z_pb - prev_z) * 0.3
 
             raw_pos = np.array([x_pb, y_pb, z_pb], dtype=np.float64)
             if _balloon_smooth is None:
                 _balloon_smooth = raw_pos
             else:
                 delta = raw_pos - _balloon_smooth
-                if np.linalg.norm(delta) > BALLOON_MAX_JUMP:
-                    raw_pos = _balloon_smooth + delta * 0.2
+                delta_norm = float(np.linalg.norm(delta))
+                if delta_norm > BALLOON_MAX_JUMP:
+                    raw_pos = _balloon_smooth + delta * (BALLOON_MAX_JUMP / delta_norm)
                 _balloon_smooth = (
                     _balloon_smooth + (raw_pos - _balloon_smooth) * BALLOON_SMOOTH_ALPHA
                 )
 
             _balloon_pb_pos = _balloon_smooth.tolist()
-            _balloon_smooth_z = float(_balloon_smooth[2])
             p.resetBasePositionAndOrientation(balloon_id, _balloon_pb_pos, [0, 0, 0, 1])
 
             touching_ground = height_cm <= GROUND_TOUCH_HEIGHT_CM
@@ -987,19 +981,7 @@ def main():
             last_left_frame = fl
             if not left_window_ready:
                 cv2.namedWindow(left_window, cv2.WINDOW_NORMAL)
-                cv2.setMouseCallback(left_window, roi_selector.on_mouse)
                 left_window_ready = True
-            if roi_selector.enabled:
-                roi_selector.draw(fl)
-                cv2.putText(
-                    fl,
-                    "ROI MODE",
-                    (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                )
             cv2.imshow(left_window, fl)
         except queue.Empty:
             pass
@@ -1039,6 +1021,7 @@ def main():
 
         time.sleep(max(0, 0.016 - dt))
 
+    _kb_listener.stop()
     p.disconnect()
     cv2.destroyAllWindows()
     print("\n[GAME] Cerrando...")

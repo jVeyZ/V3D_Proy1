@@ -207,9 +207,28 @@ def main():
         if img_l is None or img_r is None:
             continue
 
+        h_l, w_l = img_l.shape[:2]
+        h_r, w_r = img_r.shape[:2]
+        if (w_l, h_l) != (w_r, h_r):
+            print(f"WARNING: resolution mismatch in pair {pair_idx} - "
+                  f"Left: {w_l}x{h_l}, Right: {w_r}x{h_r}. "
+                  f"Resizing both to {min(w_l, w_r)}x{min(h_l, h_r)}.")
+            target_w = min(w_l, w_r)
+            target_h = min(h_l, h_r)
+            img_l = cv2.resize(img_l, (target_w, target_h))
+            img_r = cv2.resize(img_r, (target_w, target_h))
+            w_l, h_l = target_w, target_h
+
+        if image_size is None:
+            image_size = (w_l, h_l)
+        elif (w_l, h_l) != image_size:
+            print(f"WARNING: pair {pair_idx} has size {w_l}x{h_l}, "
+                  f"expected {image_size[0]}x{image_size[1]}. Resizing to match.")
+            img_l = cv2.resize(img_l, image_size)
+            img_r = cv2.resize(img_r, image_size)
+
         gray_l = cv2.cvtColor(img_l, cv2.COLOR_BGR2GRAY)
         gray_r = cv2.cvtColor(img_r, cv2.COLOR_BGR2GRAY)
-        image_size = (gray_l.shape[1], gray_l.shape[0])
 
         ch_corners_l, ch_ids_l, marker_corners_l, marker_ids_l, _ = detect_charuco(
             gray_l, board, aruco_dict, aruco_params

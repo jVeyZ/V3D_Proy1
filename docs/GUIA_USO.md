@@ -30,7 +30,32 @@ Dependencias principales:
 - `pynput`: control de teclado de respaldo.
 - `mediapipe`: detección de manos y gestos.
 
-## 3. Ejecución
+## 3. Configuración de cámaras
+
+Las cámaras pueden ser índices locales o URLs HTTP/RTSP. Ejemplos:
+
+```python
+# Dos cámaras locales
+CAMERA_LEFT = 0
+CAMERA_RIGHT = 1
+CAMERA_GESTURE = 2
+
+# Laptop + móvil por red
+CAMERA_LEFT = 0
+CAMERA_RIGHT = "http://192.168.1.50:8080/video"
+CAMERA_GESTURE = 2
+```
+
+Para móvil por red, usa una app tipo IP Webcam/DroidCam/RTSP Camera, conecta móvil y ordenador a la misma WiFi y usa la URL de vídeo en `CAMERA_RIGHT` y en los scripts de captura:
+
+```bash
+python scripts/capture_charuco_stereo.py \
+  --left 0 \
+  --right "http://192.168.1.50:8080/video" \
+  --output calibration/capture
+```
+
+## 4. Ejecución
 
 ```bash
 python -m src.balloon_catch
@@ -43,27 +68,28 @@ La aplicación abre:
 - ventana `Stereo Right`;
 - ventana `Gesture Robot`.
 
-## 4. Flujo de demostración recomendado
+## 5. Flujo de demostración recomendado
 
-1. Colocar dos cámaras con solape visual suficiente.
-2. Verificar que existe `calibration/stereo_charuco.npz`.
-3. Ejecutar:
+1. Colocar dos cámaras con solape visual suficiente y fijarlas físicamente.
+2. Capturar 15-25 pares ChArUco con `scripts/capture_charuco_stereo.py`.
+3. Generar calibración estéreo con `scripts/calibrate_charuco_stereo.py` y revisar `calibration/report/STEREO_CALIBRATION_REPORT.md`.
+4. Colocar ChArUco sobre el plano del juego, capturar un par en `calibration/world_charuco` y generar `calibration/world_transform.npz` con `scripts/calibrate_world_from_charuco.py`.
+5. Ejecutar:
 
    ```bash
    python -m src.balloon_catch
    ```
 
-4. Antes de la demo, generar una calibración estéreo con `scripts/calibrate_charuco_stereo.py` y revisar `calibration/report/STEREO_CALIBRATION_REPORT.md`.
-5. Calibrar el sistema de mundo con `scripts/calibrate_world_from_points.py` para crear `calibration/world_transform.npz`.
-6. Pulsar `P` y seleccionar una ROI sobre el globo verde en `Stereo Left` si el HSV no segmenta bien.
-7. Poner el globo cerca del suelo y pulsar `G` para fijar la referencia de suelo si la altura inicial no es estable.
-8. Lanzar/dejar caer el globo verde.
-9. Controlar el robot virtual con gestos para colocarlo bajo el globo antes de que toque el suelo.
-10. Observar el resultado en consola:
+6. Confirmar en consola que el modo de triangulación es `WORLD` y que no hay warning de RMS alto.
+7. Pulsar `P` y seleccionar una ROI sobre el globo verde en `Stereo Left` si el HSV no segmenta bien.
+8. Poner el globo cerca del suelo y pulsar `G` para fijar la referencia de suelo si la altura inicial no es estable.
+9. Lanzar/dejar caer el globo verde.
+10. Controlar el robot virtual con gestos para colocarlo bajo el globo antes de que toque el suelo.
+11. Observar el resultado en consola:
    - `[CATCH] ¡Atrapado!`
    - `[CATCH] Fallo`
 
-## 5. Controles
+## 6. Controles
 
 ### Robot virtual
 
@@ -89,7 +115,7 @@ Controles de teclado de respaldo:
 | `P` | Recalibrar rango HSV del globo con ROI |
 | `Q` | Salir |
 
-## 6. Módulos principales
+## 7. Módulos principales
 
 - `src/balloon_catch.py`: aplicación integrada, hilos, mundo PyBullet, lógica del juego y mapeo estéreo→mundo virtual.
 - `src/balloon_tracker.py`: detección del globo verde en ambas cámaras y tracking con Kalman.
@@ -97,9 +123,11 @@ Controles de teclado de respaldo:
 - `src/gesture_robot.py`: detección/clasificación de gestos con MediaPipe y generación de comandos.
 - `scripts/make_charuco_board.py`: generación de tablero de calibración offline.
 - `scripts/capture_charuco_stereo.py`: captura de pares de calibración offline.
-- `scripts/calibrate_charuco_stereo.py`: calibración estéreo offline.
+- `scripts/calibrate_charuco_stereo.py`: calibración estéreo offline con reporte.
+- `scripts/calibrate_world_from_charuco.py`: calibración automática cámara izquierda → mundo usando ChArUco.
+- `scripts/calibrate_world_from_points.py`: calibración manual alternativa cámara izquierda → mundo.
 
-## 7. Cumplimiento de requisitos del Proyecto 2
+## 8. Cumplimiento de requisitos del Proyecto 2
 
 ### 2.1 Escena virtual compleja / gemelo digital
 
@@ -179,14 +207,14 @@ La aplicación integra:
 
 El juego completo consiste en coordinar un objeto real 3D medido por estereovisión con un robot virtual controlado por gestos.
 
-## 8. Limitaciones conocidas
+## 9. Limitaciones conocidas
 
 - La precisión 3D depende mucho de la calibración estéreo y del ajuste cámara→mundo. Si el globo virtual salta o la altura no es estable, repetir calibración.
 - El sistema actual está optimizado para un único globo verde. Si hay varios objetos verdes, la correspondencia puede confundirse.
 - El mapeo al mundo virtual depende de los puntos de `calibration/world_points.csv`; si esos puntos se marcan mal, el mundo queda sesgado.
 - La realidad aumentada proyecta la huella del robot sobre la cámara izquierda cuando existe `world_transform.npz`.
 
-## 9. Checklist para presentación
+## 10. Checklist para presentación
 
 - [ ] Mostrar cámaras izquierda/derecha detectando el globo.
 - [ ] Mostrar valores XYZ triangulados en consola/overlay.

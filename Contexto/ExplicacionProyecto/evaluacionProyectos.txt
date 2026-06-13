@@ -1,0 +1,209 @@
+VISIÓN 3D (14536)
+DESCRIPCIÓN DE PROYECTOS
+INTRODUCCIÓN:
+La asignatura de visión 3D se divide en dos grandes partes:
+(1) Posicionamiento 3D planar con una cámara.
+(2) Posicionamiento 3D con dos cámaras.
+(2)
+(1)
+Fig. 1.- Posible contexto de los proyectos (aunque puede ser cualquier otro).
+Cada parte se evaluará con un proyecto. Ambos proyectos consistirán en el
+diseño, desarrollo y validación de una aplicación que permita:
+(1) Posicionar o localizar objetos y/o personas reales.
+(2) Interactuar con objetos y/o robots virtuales en un entorno de realidad
+aumentada.
+El objetivo principal de los proyectos es posicionar algún objeto real presente en
+una escena de trabajo con la mayor precisión posible. Además, se deberá crear
+un visor de realidad virtual y otro de realidad aumentada, donde se representarán
+todos los elementos reales y virtuales definidos en las aplicaciones. A priori, las
+aplicaciones a desarrollar serán aplicaciones interactivas entre personas, robots
+y objetos reales y/o virtuales. Se podrá elegir cualquier aplicación que os
+interese, siempre que esta sea acordada previamente con el profesor. La
+aplicación del segundo proyecto deberá integrar un reconocedor 3D de gestos
+humanos que sirva de interfaz humano-máquina y permita actuar sobre algún
+objeto virtual.
+Los dos proyectos se desarrollarán por equipos de trabajo de 5, 4 o 3 estudiantes
+en dedicación no presencial. Se recomienda empezar a diseñar los proyectos
+cuanto antes y desarrollarlos por “sprints” según avancen las sesiones de teoría
+y práctica.
+En el Laboratorio Radia Perlman de la ETSINF, se ha habilitado un espacio libre
+de trabajo con varios sistemas de visión donde se podrán desarrollar las
+sesiones de prácticas y los proyectos de manera coordinada entre los equipos.
+Cada sistema de visión está compuesto por una cámara ZED2 (StereoLabs) y
+un PC con una GPU (NVIDIA® con una capacidad de computo > 5) que permite
+utilizar la funcionalidad de ZED2 para procesar las imágenes mediante CNNs.
+Fig 2.- Stereolabs® ZED™ (Stereo)
+Cámaras ZED2
+Servidores (con GPU)
+Como alternativa, para evitar utilizar el espacio compartido del laboratorio,
+también se podrá desarrollar los proyectos en cualquier otro escenario siempre
+que se disponga de algún sistema de visión propio y se acuerde previamente
+con el profesor. Por ejemplo, podríais montar vuestro sistema de visión con dos
+webcams (cámaras de móvil, etc.) que tengáis disponibles. En este caso, la
+captura de imágenes será asíncrona, por lo que el objeto de interés deberá
+permanecer estático entre las capturas de imágenes. Se recomienda utilizar
+cámaras conectadas por cable al PC, ya que la transmisión de imágenes por wifi
+puede llegar a ser demasiado lenta. Incluso en el caso de definir un escenario
+estático se puede simular un par de cámaras con la cámara de un único móvil.
+P1 P2
+Fig. 3.- Caso extremo: Simulación de un par de estereovisión con una sola cámara.
+1. PROYECTO 1: Posicionamiento 3D de puntos de interés en un plano de
+trabajo con una cámara.
+En este proyecto, todos los elementos reales de la aplicación interactiva que
+diseñéis se deberán situar sobre un plano de trabajo y utilizar una sola cámara
+para posicionarlos. A priori, las tareas a realizar serán las siguientes (aunque se
+pueden acordar alternativas con el profesor):
+1.1) 1.2) 1.3) 1.4) Crear y mostrar una escena virtual simple que sea un gemelo digital de
+la escena de la aplicación. Se deberá desarrollar un visor que muestre la
+escena virtual utilizando la funcionalidad de Open3D o de un simulador de
+robótica interactivo. Esta escena virtual debe mostrar el estado de al
+menos un objeto real y uno virtual. (2 puntos)
+Detectar y seguir al menos un objeto real en movimiento durante la
+secuencia de imágenes capturada por la cámara. La detección se
+realizará únicamente sobre la primera imagen de la secuencia. Mientras
+que el seguimiento se realizará en el resto de las imágenes de la
+secuencia, aprovechando la información de las detecciones previas. Por
+ejemplo, se puede detectar y seguir objetos reales en movimiento como
+una pelota, un marcador móvil o una persona. Por otra parte, también se
+puede utilizar marcadores fijos para definir la localización de algún objeto
+virtual (como un agujero virtual, una meta virtual, etc.). Para empezar, se
+recomienda resolver la tarea de detección de manera manual, pulsando
+con el ratón en el centro de cada objeto sobre las imágenes (o
+seleccionando la región de interés que los contiene). Después, también
+se deberá automatizar el proceso de detección de los objetos utilizando
+técnicas automáticas desarrolladas con funcionalidad propia o de
+OpenCV. (2 puntos)
+Posicionar el centro de al menos un objeto real, sobre el que se realiza
+la detección y seguimiento del apartado anterior, utilizando una sola
+cámara. Se asumirá que los centros siempre estarán situados sobre el
+plano de trabajo (por ejemplo, el tablero de una mesa, el suelo, etc.). Se
+recomienda resolver este problema calibrando la cámara con una
+homografía de la manera más precisa posible. En el visor virtual, se
+deberá simular el movimiento de los objetos reales, actualizando de
+manera continua la posición los objetos reales en movimiento según las
+posiciones estimadas. Además, en el visor de realidad aumentada se
+deberán mostrar las imágenes capturadas por la cámara con las
+proyecciones de los elementos virtuales. (2 puntos)
+Si los centros de los objetos no están sobre el plano de trabajo, el
+posicionamiento anterior será erróneo. Tomando como dato conocido, la
+altura de los objetos, corregir las posiciones de los centros de los
+objetos. Si en vuestra aplicación los centros de los objetos sí que están
+sobre el plano de trabajo, explicar cómo se haría esta corrección en el
+supuesto que no fuera así. (2 puntos)
+1.5) Desarrollar una aplicación de posicionamiento planar que integre la
+funcionalidad anterior de manera eficiente. Para generar ideas sobre
+posibles aplicaciones, personalmente me resulta muy interesante la
+automatización de tareas colaborativas entre un humano y un robot. Por
+ejemplo, la tarea de “pick” flexible, donde un robot coge (y podría seguir)
+un objeto de interés, que le ha dejado un humano en cualquier posición
+sobre un plano de trabajo. En aras a simplificar, el objeto de interés podría
+ser esférico, evitando así la necesidad de estimar su orientación. Además,
+será factible utilizar un robot móvil virtual modelándolo simplemente como
+una esfera. Otro contexto de aplicaciones, que también os puede
+interesar, son los juegos interactivos. En este caso, podríais desarrollar
+cualquier juego interactivo con una pelota que se mueva sobre un plano.
+Por ejemplo, un juego individual del golpeo con el “putter” de golf sobre
+una superficie plana que simula el “Green”, billar, gua, pinball, etc. En
+todas estas aplicaciones, las soluciones de los apartados anteriores (1.2,
+1.3 y 1.4) se integran en la solución del seguimiento y localización de un
+objeto real de la escena. Como alternativa, esta solución se puede integrar
+sobre una interfaz humano-máquina, que controle el posicionamiento de
+un objeto virtual, moviendo un objeto real sobre un plano (una especie de
+ratón basado en visión). En este caso el objeto real no pertenece a la
+escena de la aplicación y sólo actúa como puntero de control. De esta
+manera, se pueden desarrollar aplicaciones competitivas por equipos
+mucho más divertidas, como por ejemplo el Pong, aunque se deberá
+incluir un motor físico para gestionar la dinámica y las colisiones. (2
+puntos).
+ENTREGA DEL PROYECTO 1:
+La fecha límite de entrega de toda la documentación del proyecto 1 será el
+miércoles 1 de abril. Uno de los estudiantes del equipo de trabajo subirá a su
+espacio compartido de PoliformaT los siguientes documentos:
+1 - una memoria (aprox. 4 páginas). Unas 2 páginas dónde se resuma qué
+se ha hecho y quién lo ha hecho. Otras 2 páginas para detallar el proceso de
+guiado (indicar los prompts) y corrección de la IA.
+2 – todo el código del proyecto en un fichero .zip.
+3 - y la presentación Pecha Kucha.
+Además, todos los estudiantes realizarán un examen de coevaluación por cada
+componente del equipo. Estos exámenes de publicarán en PoliformaT unos días
+antes de la presentación. El retraso en la entrega de la documentación se
+penalizará con un 2.5%, por cada día de retraso.
+Por otra parte, el miércoles 1 de abril se defenderá oralmente el trabajo
+presentado con un Pecha Kucha. Además, en esta sesión se mostrará una demo
+o un vídeo de la aplicación y se contestará a un turno de preguntas moderado
+por el profesor.
+Tener en cuenta que todos los alumnos del equipo deberéis presentar un Half
+Pecha Kucha (ya sea en este proyecto o en el posterior). La distribución de las
+presentaciones entre los dos proyectos debe ser de 2+3, 2+2 o 1+2 Half Pecha
+Kuchas en el caso de 5, 4 o 3 componentes del equipo respectivamente.
+2. PROYECTO 2: Posicionamiento 3D de puntos de interés con dos
+cámaras.
+A diferencia del proyecto anterior, este proyecto no restringe a un plano la
+situación de los elementos de la aplicación y utiliza dos cámaras para
+posicionar los objetos reales. Las tareas a realizar pueden ser las siguientes
+(aunque se pueden acordar alternativas con el profesor):
+2.1) 2.2) 2.3) 2.4) Crear y mostrar una escena virtual más compleja (que sea un gemelo
+digital de la escena de la aplicación) y un visor que muestre la escena
+utilizando la funcionalidad de open3D o de un simulador de robótica
+interactivo. Esta escena virtual debe incluir al menos un objeto real y un
+robot virtual. (2 puntos)
+Detectar y seguir puntos de interés de los objetos reales en las imágenes
+y resolver el problema de correspondencias. Inicialmente se
+recomienda resolver los problemas de detección y correspondencias de
+manera manual, marcando con el ratón la posición de los puntos de
+interés (o centros de las regiones de interés) de cada objeto sobre las
+distintas imágenes. Después, resolver automáticamente los problemas de
+detección y correspondencias de los puntos de interés de todos los
+objetos utilizando funcionalidad de OpenCV, Yolo, Mediapipe, o ZED2. (2
+puntos)
+Posicionar, con respecto a un sistema 3D de referencia del mundo,
+los puntos de interés (o centros) de los objetos reales. Se recomienda
+resolver este problema calibrando las cámaras de la manera más
+precisa (deberéis reportar un indicador del error de calibración, junto con
+las imágenes de calibración) y aplicando estereovisión con la mejor
+configuración de cámaras posible. En el visor virtual, se deberá mostrar
+de manera continua la escena virtual actualizando la posición los objetos
+reales en movimiento según las posiciones estimadas. Además, se
+deberá proyectar los objetos y/o robots virtuales sobre las imágenes
+capturadas por una cámara generando realidad aumentada. (2 puntos)
+Desarrollar una interfaz humano-máquina basada en visión 3d. Para
+ello, se deberán seguir dos puntos de interés de al menos una persona
+presente en la escena utilizando funcionalidad de Yolo, MediaPipe o
+ZED2. Por ejemplo, los pies o los puntos de muñeca. En el caso de no
+poder utilizar la funcionalidad de Yolo, MediaPipe o ZED2 se podrán
+añadir marcadores sobre los puntos de interés. Después, desarrollar un
+clasificador de gestos, definiendo un conjunto finito de gestos según las
+posiciones relativas de los puntos de interés que permita actuar sobre los
+objetos virtuales de la aplicación. (2 puntos)
+2.5) Desarrollar una aplicación 3D que integre toda la funcionalidad
+desarrollada anteriormente de manera eficiente con un procesamiento
+paralelo multihilo (o distribuido). Por ejemplo, una aplicación podría
+consistir en resolver la tarea en la que un humano le pasa un objeto real
+a un robot virtual. En este caso, el humano le acercará el objeto sobre la
+palma de su mano a cualquier posición dentro de la zona de alcance del
+robot, para que el sistema de visión lo posicione continuamente durante
+el seguimiento y el robot lo coja. Otro ejemplo de aplicación podría ser un
+juego interactivo entre personas, robots y objetos reales y/o virtuales
+con interfaces humano-máquina basados en visión 3D. (2 puntos)
+ENTREGA DEL PROYECTO 2:
+La fecha límite de entrega de la documentación del proyecto 2 será el martes 16
+de junio. Uno de los alumnos del equipo subirá a su espacio compartido de
+PoliformaT los siguientes documentos:
+1 - una memoria (aprox. 4 páginas). Unas 2 páginas dónde se resuma qué
+se ha hecho y quién lo ha hecho. Otras 2 páginas para detallar el proceso de
+guiado (indicar los prompts) y corrección de la IA.
+2 – todo el código del proyecto en un fichero .zip.
+3 - y la presentación Pecha Kucha.
+Además, todos los estudiantes realizarán un examen de coevaluación por cada
+componente del equipo. Estos exámenes de publicarán en PoliformaT unos días
+antes de la presentación. El retraso en la entrega de la documentación se
+penalizará con un 2.5%, por cada día de retraso.
+Por otra parte, el martes 16 de junio se defenderá oralmente el trabajo
+presentado con un Pecha Kucha. Además, en esta sesión se mostrará una demo
+o un vídeo de la aplicación implementada y se contestará a un turno de preguntas
+moderado por el profesor.
+Tener en cuenta que todos los alumnos del equipo deberéis presentar un Half
+Pecha Kucha (ya sea en este proyecto o en el anterior). La distribución de las
+presentaciones entre los dos proyectos debe ser de 2+3, 2+2 o 1+2 Half Pecha
+Kuchas en el caso de 5, 4 o 3 componentes del equipo respectivamente.
+Nota: En caso de duda sobre la evaluación, no dudéis en hablar con el profesor.

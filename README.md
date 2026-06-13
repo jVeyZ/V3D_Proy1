@@ -48,11 +48,79 @@ Editar `src/game_config.py` si tus índices no coinciden:
 
 ```python
 CAMERA_LEFT = 0
-CAMERA_RIGHT = 2
-CAMERA_GESTURE = 0
+CAMERA_RIGHT = 1
+CAMERA_GESTURE = 2
 ```
 
 Puedes probar índices con OpenCV o cambiarlos hasta que `Stereo Left`, `Stereo Right` y `Gesture Robot` abran las cámaras correctas.
+
+### 2.1 Usar una cámara de laptop + un móvil por red
+
+El proyecto permite que una fuente de cámara sea un índice local (`0`, `1`, `2`, ...) y la otra sea una URL HTTP/RTSP. Esto es útil si usas:
+
+- cámara izquierda: webcam/laptop;
+- cámara derecha: móvil emitiendo vídeo por WiFi.
+
+#### Opción Android recomendada: IP Webcam
+
+1. Instala en el móvil una app tipo **IP Webcam** o equivalente.
+2. Conecta el móvil y el ordenador a la **misma red WiFi**.
+3. Abre la app y empieza el servidor de cámara.
+4. La app mostrará una URL parecida a:
+
+```text
+http://192.168.1.50:8080
+```
+
+5. En OpenCV normalmente se usa el endpoint de vídeo:
+
+```text
+http://192.168.1.50:8080/video
+```
+
+6. Prueba la captura estéreo así:
+
+```bash
+python scripts/capture_charuco_stereo.py \
+  --left 0 \
+  --right "http://192.168.1.50:8080/video" \
+  --output calibration/capture
+```
+
+#### Otras apps
+
+Según la app, la URL puede cambiar:
+
+| App/tipo | URL típica |
+| --- | --- |
+| IP Webcam Android | `http://IP:8080/video` |
+| DroidCam | `http://IP:4747/video` o cámara virtual local |
+| RTSP Camera | `rtsp://IP:PUERTO/ruta` |
+| Iriun/Camo/EpocCam | suele aparecer como cámara virtual local (`0`, `1`, `2`, ...) |
+
+#### Configurar el juego con móvil por red
+
+En `src/game_config.py` puedes dejar la laptop como izquierda y el móvil como derecha:
+
+```python
+CAMERA_LEFT = 0
+CAMERA_RIGHT = "http://192.168.1.50:8080/video"
+CAMERA_GESTURE = 2
+```
+
+Después ejecuta normalmente:
+
+```bash
+python -m src.balloon_catch
+```
+
+#### Recomendaciones importantes para estéreo con móvil
+
+- Fija físicamente el móvil: no debe moverse después de calibrar.
+- Usa WiFi estable y buena iluminación.
+- Evita resoluciones muy altas si hay latencia.
+- Repite la calibración si cambias posición, zoom, app, resolución o enfoque.
+- La captura por WiFi no es perfectamente síncrona; para un globo cayendo rápido puede introducir error. Si la demo es inestable, usa movimiento más lento, más luz o dos cámaras USB.
 
 ---
 
@@ -79,8 +147,19 @@ Parámetros por defecto:
 
 Captura pares sincronizados o lo más simultáneos posible:
 
+Con dos cámaras locales:
+
 ```bash
-python scripts/capture_charuco_stereo.py --left 0 --right 2 --output calibration/capture
+python scripts/capture_charuco_stereo.py --left 0 --right 1 --output calibration/capture
+```
+
+Con laptop + móvil por red:
+
+```bash
+python scripts/capture_charuco_stereo.py \
+  --left 0 \
+  --right "http://192.168.1.50:8080/video" \
+  --output calibration/capture
 ```
 
 Controles:
@@ -161,7 +240,72 @@ La triangulación estéreo devuelve inicialmente coordenadas en el sistema de la
 X_world = R_world_from_left @ X_left_camera + t_world_from_left
 ```
 
-### 6.1 Preparar puntos conocidos
+Hay dos formas de hacerlo:
+
+- **Automática con ChArUco**: recomendada.
+- **Manual con `world_points.csv`**: alternativa si no queréis usar ChArUco para esta fase offline.
+
+### 6.A Método automático recomendado: ChArUco como sistema mundo
+
+Coloca el tablero ChArUco impreso **plano sobre el suelo/mesa del juego**, en la posición que quieras definir como origen del mundo. La esquina/origen del tablero será el origen `(0,0,0)` salvo que uses offsets.
+
+Captura un par estéreo con el tablero colocado en el área de juego:
+
+Con dos cámaras locales:
+
+```bash
+python scripts/capture_charuco_stereo.py --left 0 --right 1 --output calibration/world_charuco
+```
+
+Con laptop + móvil por red:
+
+```bash
+python scripts/capture_charuco_stereo.py \
+  --left 0 \
+  --right "http://192.168.1.50:8080/video" \
+  --output calibration/world_charuco
+```
+
+Pulsa `s` para guardar una pareja, por ejemplo:
+
+```text
+calibration/world_charuco/left/left_000.png
+calibration/world_charuco/right/right_000.png
+```
+
+Genera automáticamente `world_transform.npz`:
+
+```bash
+python scripts/calibrate_world_from_charuco.py \
+  --stereo-calibration calibration/stereo_charuco.npz \
+  --left-image calibration/world_charuco/left/left_000.png \
+  --right-image calibration/world_charuco/right/right_000.png \
+  --output calibration/world_transform.npz \
+  --report calibration/WORLD_TRANSFORM_REPORT.md
+```
+
+El script detecta las esquinas ChArUco en ambas imágenes, triangula sus posiciones 3D con la calibración estéreo y calcula la transformación cámara izquierda → mundo automáticamente.
+
+Si el tablero no está exactamente en el origen del campo, usa offsets:
+
+```bash
+python scripts/calibrate_world_from_charuco.py \
+  --stereo-calibration calibration/stereo_charuco.npz \
+  --left-image calibration/world_charuco/left/left_000.png \
+  --right-image calibration/world_charuco/right/right_000.png \
+  --world-offset-x-cm 10 \
+  --world-offset-y-cm 5 \
+  --world-offset-z-cm 0
+```
+
+También genera imágenes anotadas en:
+
+```text
+calibration/world_report/images/world_left_detected.png
+calibration/world_report/images/world_right_detected.png
+```
+
+### 6.B Método manual alternativo: puntos conocidos
 
 Copiar la plantilla:
 
@@ -194,7 +338,7 @@ Recomendaciones:
 - Añadir al menos un punto con altura conocida (`z>0`) para fijar bien el eje vertical.
 - No hace falta usar marcadores durante el juego; estos puntos son solo para calibración offline.
 
-### 6.2 Generar `world_transform.npz`
+### 6.B.2 Generar `world_transform.npz`
 
 ```bash
 python scripts/calibrate_world_from_points.py \
@@ -370,7 +514,8 @@ src/gesture_robot.py              # gestos MediaPipe
 scripts/make_charuco_board.py     # generar tablero
 scripts/capture_charuco_stereo.py # capturar pares estéreo
 scripts/calibrate_charuco_stereo.py # calibración estéreo + reporte
-scripts/calibrate_world_from_points.py # cámara izquierda → mundo
+scripts/calibrate_world_from_charuco.py # cámara izquierda → mundo automático con ChArUco
+scripts/calibrate_world_from_points.py # cámara izquierda → mundo manual
 calibration/stereo_charuco.npz
 calibration/world_transform.npz
 ```
