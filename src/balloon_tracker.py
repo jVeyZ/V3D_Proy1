@@ -9,7 +9,7 @@ from collections import deque
 import cv2
 import numpy as np
 
-import src.game_config as config
+import game_config as config
 
 
 class GreenBalloonTracker:

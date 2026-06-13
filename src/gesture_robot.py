@@ -7,13 +7,11 @@ from pathlib import Path
 
 import cv2
 
-try:
-    import mediapipe as mp
 
-    MEDIAPIPE_AVAILABLE = True
-except Exception:
-    mp = None
-    MEDIAPIPE_AVAILABLE = False
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from mediapipe.tasks.python.components.containers.landmark import NormalizedLandmark
 
 
 COMMAND_MAP = {
@@ -38,7 +36,6 @@ class GestureRobotController:
         self.model_path = str(model_path)
         self.min_score = max(float(min_score), 0.40)
 
-        self.enabled = MEDIAPIPE_AVAILABLE
         self._running = False
         self._thread = None
 
@@ -54,9 +51,6 @@ class GestureRobotController:
         self._frame_lock = threading.Lock()
 
     def start(self):
-        if not self.enabled or mp is None:
-            print("[GestureRobot] MediaPipe no disponible.")
-            return False
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -189,71 +183,125 @@ class GestureRobotController:
             return "Victory"
         return None
 
-    def _run_simple_hands_fallback(self):
-        if mp is None or self._cap is None:
+    def _run_hand_landmarker_fallback(self, hand_landmarker_path):
+        if self._cap is None:
             return
-        cap = self._cap
-        hands = mp.solutions.hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=1,
-            min_detection_confidence=0.5,
+
+        latest_result = None
+        result_lock = threading.Lock()
+        start_time = time.monotonic()
+
+        def on_result(result, _output_image, _timestamp_ms):
+            nonlocal latest_result
+            with result_lock:
+                latest_result = copy.deepcopy(result)
+
+        options = mp.tasks.vision.HandLandmarkerOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=str(hand_landmarker_path)),
+            running_mode=mp.tasks.vision.RunningMode.LIVE_STREAM,
+            num_hands=2,
+            min_hand_detection_confidence=0.5,
             min_tracking_confidence=0.5,
+            result_callback=on_result,
         )
-        drawer = mp.solutions.drawing_utils
-        connections = mp.solutions.hands.HAND_CONNECTIONS
-        print("[GestureRobot] Fallback MediaPipe Hands activo.")
+        landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
+        print("[GestureRobot] Fallback HandLandmarker activo (modern API).")
 
         while self._running:
-            ret, frame = cap.read()
+            ret, frame = self._cap.read()
             if not ret:
                 time.sleep(0.001)
                 continue
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = hands.process(rgb)
-            payload = {
-                "command_left": None,
-                "command_right": None,
-                "timestamp_ms": int(time.time() * 1000),
-            }
+            ts_ms = int((time.monotonic() - start_time) * 1000)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb.copy())
 
-            if result.multi_hand_landmarks:
-                handedness_list = result.multi_handedness or []
-                for i, hand_landmarks in enumerate(result.multi_hand_landmarks):
-                    drawer.draw_landmarks(frame, hand_landmarks, connections)
-                    if i >= len(handedness_list):
-                        continue
-                    hand = handedness_list[i].classification[0].label.lower()
-                    gesture = self._classify_simple_gesture(hand_landmarks.landmark)
-                    command = COMMAND_MAP.get((hand, gesture)) if gesture is not None else None
-                    if hand == "left":
-                        payload["command_left"] = command
-                    elif hand == "right":
-                        payload["command_right"] = command
-                    if gesture is not None:
-                        cv2.putText(frame, f"{hand}: {gesture}", (15, 85 + i * 28),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (80, 255, 80), 2)
+            try:
+                landmarker.detect_async(mp_image, ts_ms)
+            except RuntimeError:
+                continue
 
+            with result_lock:
+                result_snap = latest_result
+
+            payload = self._extract_commands_from_landmarks(result_snap)
             with self._lock:
                 self._last_payload = payload
-            cv2.putText(frame, "GESTURE: MediaPipe Hands fallback", (15, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 255), 2)
-            with self._frame_lock:
-                self._latest_frame = frame.copy()
-            time.sleep(0.01)
 
-        hands.close()
+            display_frame = self._draw_landmarker_overlay(frame, result_snap, payload)
+            with self._frame_lock:
+                self._latest_frame = display_frame
+
+        landmarker.close()
+
+    def _extract_commands_from_landmarks(self, result):
+        payload = {
+            "command_left": None,
+            "command_right": None,
+            "timestamp_ms": int(time.time() * 1000),
+        }
+        if result is None or not getattr(result, "hand_landmarks", None):
+            return payload
+
+        for i, landmarks in enumerate(result.hand_landmarks):
+            hand = self._get_hand_label(result, i)
+            if hand is None:
+                continue
+            gesture = self._classify_simple_gesture(landmarks)
+            command = COMMAND_MAP.get((hand, gesture)) if gesture is not None else None
+            if hand == "left":
+                payload["command_left"] = command
+            elif hand == "right":
+                payload["command_right"] = command
+
+        return payload
+
+    def _draw_landmarker_overlay(self, frame_bgr, result, payload):
+        out = frame_bgr.copy()
+        h, w, _ = out.shape
+
+        num_hands = (
+            len(result.hand_landmarks)
+            if (result and getattr(result, "hand_landmarks", None))
+            else 0
+        )
+
+        if num_hands == 0:
+            cv2.putText(out, "HANDS: 0", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+        else:
+            for i, landmarks in enumerate(result.hand_landmarks):
+                pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+                for a, b in self._HAND_CONNECTIONS:
+                    if a < len(pts) and b < len(pts):
+                        cv2.line(out, pts[a], pts[b], (0, 210, 110), 2, cv2.LINE_AA)
+                for idx, pt in enumerate(pts):
+                    r = 6 if idx in (4, 8, 12, 16, 20) else 4
+                    cv2.circle(out, pt, r, (0, 150, 255), -1, cv2.LINE_AA)
+                    cv2.circle(out, pt, r, (255, 255, 255), 1, cv2.LINE_AA)
+
+                hand_label = self._get_hand_label(result, i) or "?"
+                gesture = self._classify_simple_gesture(landmarks) or "?"
+                command = payload.get(f"command_{hand_label}")
+                cmd_str = f" -> {command}" if command else ""
+                label = f"[{hand_label}] {gesture}{cmd_str}"
+                tx = max(0, min(p[0] for p in pts))
+                ty = max(22, min(p[1] for p in pts) - 12)
+                (tw, tgh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.65, 2)
+                cv2.rectangle(out, (tx - 2, ty - tgh - 4), (tx + tw + 2, ty + 4), (0, 0, 0), -1)
+                cv2.putText(out, label, (tx, ty), cv2.FONT_HERSHEY_DUPLEX, 0.65, (88, 230, 54), 2, cv2.LINE_AA)
+
+            cv2.putText(out, f"HANDS: {num_hands}", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+
+        cv2.putText(out, "GESTURE: HandLandmarker fallback", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 255), 2)
+        return out
 
     def _run(self):
-        if not self.enabled or mp is None:
-            return
 
         if self._cap is None:
             self._cap = cv2.VideoCapture(self.camera_index)
         if not self._cap.isOpened():
             print(f"[GestureRobot] No se pudo abrir camara {self.camera_index}")
-            self.enabled = False
             return
 
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -261,8 +309,12 @@ class GestureRobotController:
 
         model_path = Path(self.model_path)
         if not model_path.exists():
-            print(f"[GestureRobot] Modelo no encontrado: {model_path}; usando clasificador geometrico simple")
-            self._run_simple_hands_fallback()
+            hand_landmarker_path = model_path.parent / "hand_landmarker.task"
+            if hand_landmarker_path.exists():
+                print(f"[GestureRobot] Modelo no encontrado: {model_path}; usando HandLandmarker con clasificador geometrico")
+                self._run_hand_landmarker_fallback(hand_landmarker_path)
+            else:
+                print(f"[GestureRobot] Ningun modelo disponible para fallback ({hand_landmarker_path} tampoco encontrado)")
             self._cap.release()
             return
 
